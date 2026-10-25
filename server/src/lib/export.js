@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process';
-import { constants, promises as fs } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ffmpegPath } from './binaries.js';
 import { baseNameOf, uniqueFileName } from './trackName.js';
@@ -9,6 +9,7 @@ import { AUDIO_BITRATE } from '../config.js';
 const MP3_SAMPLE_RATES = new Set([8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]);
 
 const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';
+const STAGED_EXPORT_NOTICE = '当前目录受 macOS 权限限制，已自动先导出到临时目录再搬运到目标文件夹';
 
 /**
  * 执行一次 FFmpeg，并通过 -progress 上报进度
@@ -205,9 +206,78 @@ async function removeQuietly(filePath) {
   }
 }
 
-async function runItem(item, media, hooks) {
+async function removeDirQuietly(dirPath) {
+  try {
+    await fs.rm(dirPath, { recursive: true, force: true });
+  } catch {
+    // 忽略删除失败
+  }
+}
+
+function appendNotice(current, message) {
+  if (!message) return current ?? null;
+  if (!current) return message;
+  if (current.includes(message)) return current;
+  return `${current}；${message}`;
+}
+
+async function probeDirectWrite(outputDir) {
+  const probePath = path.join(outputDir, `.extract-video-write-test-${process.pid}-${Date.now()}.tmp`);
+  try {
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(probePath, 'ok');
+    await fs.rm(probePath, { force: true });
+    return { ok: true };
+  } catch (error) {
+    await removeQuietly(probePath);
+    return { ok: false, error };
+  }
+}
+
+function runAppleScript(script) {
+  return new Promise((resolve, reject) => {
+    execFile('osascript', ['-e', script], { timeout: 120000 }, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(String(stderr || error.message).trim() || 'AppleScript 执行失败'));
+        return;
+      }
+      resolve(String(stdout || '').trim());
+    });
+  });
+}
+
+async function moveWithAppleScript(sourcePath, targetPath) {
+  const script = [
+    `set srcFile to POSIX file ${JSON.stringify(sourcePath)}`,
+    `set dstFolder to POSIX file ${JSON.stringify(path.dirname(targetPath))}`,
+    'tell application "Finder" to duplicate srcFile to dstFolder with replacing',
+  ].join('\n');
+  await runAppleScript(script);
+}
+
+async function resolveOutputStrategy(exportJob, media) {
+  const direct = await probeDirectWrite(exportJob.outputDir);
+  if (direct.ok) {
+    return { mode: 'direct', stagingDir: null };
+  }
+
+  if (process.platform !== 'darwin') {
+    throw new Error(`输出目录不可写：${exportJob.outputDir}（${direct.error.message}）`);
+  }
+
+  const baseDir = media.uploadDir || path.dirname(media.storedPath);
+  const stagingDir = path.join(baseDir, '__export_staging__', exportJob.id);
+  await fs.mkdir(stagingDir, { recursive: true });
+  return {
+    mode: 'staged',
+    stagingDir,
+    reason: direct.error.message,
+  };
+}
+
+async function runItem(item, media, outputPath, hooks) {
   const inputPath = media.storedPath;
-  const context = { ...item, inputPath, outputPath: item.outputPath };
+  const context = { ...item, inputPath, outputPath };
 
   const buildArgs = (copy) => {
     if (item.kind === 'video') return videoArgs({ ...context, copy });
@@ -221,7 +291,7 @@ async function runItem(item, media, hooks) {
         durationSec: item.durationSec,
         onProgress: hooks.onProgress,
       });
-      if (!(await hasContent(item.outputPath))) {
+      if (!(await hasContent(outputPath))) {
         throw new Error('输出文件为空');
       }
       return { ok: true };
@@ -241,7 +311,7 @@ async function runItem(item, media, hooks) {
   if (item.kind !== 'video') throw first.error;
 
   hooks.onNotice?.(COPY_FALLBACK_ERROR);
-  await removeQuietly(item.outputPath);
+  await removeQuietly(outputPath);
   hooks.onProgress({ percent: 0, speed: null });
 
   const second = await attempt(false);
@@ -261,46 +331,60 @@ export async function runExportJob(exportJob, media) {
   exportJob.status = 'running';
   exportJob.startedAt = new Date().toISOString();
 
+  let strategy;
   try {
-    await fs.mkdir(exportJob.outputDir, { recursive: true });
-    await fs.access(exportJob.outputDir, constants.W_OK);
+    strategy = await resolveOutputStrategy(exportJob, media);
   } catch (error) {
     exportJob.status = 'failed';
-    exportJob.error = `输出目录不可写：${exportJob.outputDir}（${error.message}）`;
+    exportJob.error = error.message;
     exportJob.finishedAt = new Date().toISOString();
     return exportJob;
   }
 
-  for (let index = 0; index < exportJob.files.length; index += 1) {
-    if (exportJob.status === 'cancelled') break;
+  try {
+    for (let index = 0; index < exportJob.files.length; index += 1) {
+      if (exportJob.status === 'cancelled') break;
 
-    const file = exportJob.files[index];
-    const item = items[index];
-    file.status = 'running';
-    file.percent = 0;
-
-    try {
-      const result = await runItem(item, media, {
-        onProgress: ({ percent, speed, child }) => {
-          if (child) exportJob.currentChild = child;
-          if (typeof percent === 'number') file.percent = Math.round(percent * 10) / 10;
-          if (speed !== undefined) file.speed = speed;
-        },
-        onNotice: (message) => {
-          file.notice = message;
-        },
-      });
-      file.mode = result.mode;
-      file.status = 'done';
-      file.percent = 100;
-      file.sizeBytes = (await fs.stat(item.outputPath)).size;
-    } catch (error) {
-      file.status = 'failed';
+      const file = exportJob.files[index];
+      const item = items[index];
+      const workPath = strategy.mode === 'staged' ? path.join(strategy.stagingDir, item.fileName) : item.outputPath;
+      file.status = 'running';
       file.percent = 0;
-      file.error = error.message;
-      await removeQuietly(item.outputPath);
-    } finally {
-      exportJob.currentChild = null;
+      file.notice = strategy.mode === 'staged' ? appendNotice(file.notice, STAGED_EXPORT_NOTICE) : file.notice;
+
+      try {
+        const result = await runItem(item, media, workPath, {
+          onProgress: ({ percent, speed, child }) => {
+            if (child) exportJob.currentChild = child;
+            if (typeof percent === 'number') file.percent = Math.round(percent * 10) / 10;
+            if (speed !== undefined) file.speed = speed;
+          },
+          onNotice: (message) => {
+            file.notice = appendNotice(file.notice, message);
+          },
+        });
+
+        const workStat = await fs.stat(workPath);
+        if (strategy.mode === 'staged') {
+          await moveWithAppleScript(workPath, item.outputPath);
+        }
+
+        file.mode = result.mode;
+        file.status = 'done';
+        file.percent = 100;
+        file.sizeBytes = workStat.size;
+      } catch (error) {
+        file.status = 'failed';
+        file.percent = 0;
+        file.error = error.message;
+        await removeQuietly(workPath);
+      } finally {
+        exportJob.currentChild = null;
+      }
+    }
+  } finally {
+    if (strategy?.stagingDir) {
+      await removeDirQuietly(strategy.stagingDir);
     }
   }
 

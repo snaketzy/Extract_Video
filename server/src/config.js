@@ -15,8 +15,8 @@ export const UPLOAD_ROOT = process.env.UPLOAD_ROOT
   ? path.resolve(process.env.UPLOAD_ROOT)
   : path.join(SERVER_ROOT, 'data', 'uploads');
 
-/** 单个上传文件体积上限，默认 20GB */
-export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 20 * 1024 * 1024 * 1024);
+/** 单个上传文件体积上限，默认 60GB */
+export const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 60 * 1024 * 1024 * 1024);
 
 /** 任务记录（含上传文件）保留时长，默认 6 小时 */
 export const JOB_TTL_MS = Number(process.env.JOB_TTL_MS || 6 * 60 * 60 * 1000);

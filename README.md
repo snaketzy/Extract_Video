@@ -84,7 +84,7 @@ web/             前端：React 19 + Vite + Tailwind CSS + shadcn/ui + Redux Too
 | `HOST` | `127.0.0.1` | 监听地址，改为 `0.0.0.0` 可供局域网访问 |
 | `FFMPEG_PATH` / `FFPROBE_PATH` | 自动探测 | 指定二进制路径 |
 | `AUDIO_BITRATE` | `192k` | MP3 导出码率 |
-| `MAX_UPLOAD_BYTES` | `21474836480` | 单文件上传上限（20GB） |
+| `MAX_UPLOAD_BYTES` | `64424509440` | 单文件上传上限（60GB） |
 | `UPLOAD_ROOT` | `server/data/uploads` | 上传临时目录 |
 | `JOB_TTL_MS` | `21600000` | 上传文件保留时长（6 小时） |
 | `DISABLE_FOLDER_PICKER` | — | 设为 `1` 关闭原生目录选择，改为页面上手动填写路径 |

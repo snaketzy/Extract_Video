@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+*.log
+
+# 上传的临时源文件
+server/data/
+
+# 默认导出目录
+output/
+
+# 前端构建产物
+web/dist/
+web/node_modules/

@@ -1,0 +1,329 @@
+import { spawn } from 'node:child_process';
+import { constants, promises as fs } from 'node:fs';
+import path from 'node:path';
+import { ffmpegPath } from './binaries.js';
+import { baseNameOf, uniqueFileName } from './trackName.js';
+import { AUDIO_BITRATE } from '../config.js';
+
+/** libmp3lame 支持的采样率，其他采样率需要重采样 */
+const MP3_SAMPLE_RATES = new Set([8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]);
+
+const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';
+
+/**
+ * 执行一次 FFmpeg，并通过 -progress 上报进度
+ */
+function runFfmpeg(args, { durationSec = 0, onProgress = () => {} } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      ffmpegPath(),
+      ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', ...args],
+      { stdio: ['ignore', 'pipe', 'pipe'] }
+    );
+
+    let stderr = '';
+    let buffered = '';
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 40000) stderr = stderr.slice(-40000);
+    });
+
+    child.stdout.on('data', (chunk) => {
+      buffered += chunk.toString();
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+      for (const line of lines) {
+        const separator = line.indexOf('=');
+        if (separator < 0) continue;
+        const key = line.slice(0, separator);
+        const value = line.slice(separator + 1).trim();
+        if (key === 'out_time_us' || key === 'out_time_ms') {
+          const seconds = Number(value) / 1e6;
+          if (durationSec > 0 && Number.isFinite(seconds)) {
+            onProgress({ percent: Math.min(99.5, (seconds / durationSec) * 100) });
+          }
+        } else if (key === 'speed') {
+          onProgress({ speed: value === 'N/A' ? null : value });
+        }
+      }
+    });
+
+    child.on('error', (error) => reject(new Error(`无法启动 FFmpeg：${error.message}`)));
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ stderr, child });
+        return;
+      }
+      const detail = stderr.trim().split('\n').slice(-4).join(' ').trim();
+      const error = new Error(detail || `FFmpeg 退出码 ${code}`);
+      error.exitCode = code;
+      error.child = child;
+      reject(error);
+    });
+
+    onProgress({ child });
+  });
+}
+
+function videoArgs({ inputPath, streamIndex, outputPath, codec, copy }) {
+  const base = [
+    '-y', '-i', inputPath,
+    '-map', `0:${streamIndex}`,
+    '-an', '-sn', '-dn',
+  ];
+  if (copy) {
+    return [
+      ...base,
+      '-c:v', 'copy',
+      ...(codec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
+      '-movflags', '+faststart',
+      outputPath,
+    ];
+  }
+  return [
+    ...base,
+    '-c:v', 'libx264',
+    '-preset', 'medium',
+    '-crf', '18',
+    '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart',
+    outputPath,
+  ];
+}
+
+function audioArgs({ inputPath, streamIndex, outputPath, sampleRate }) {
+  const args = [
+    '-y', '-i', inputPath,
+    '-map', `0:${streamIndex}`,
+    '-vn', '-sn', '-dn',
+    '-c:a', 'libmp3lame',
+    '-b:a', AUDIO_BITRATE,
+  ];
+  if (!sampleRate || !MP3_SAMPLE_RATES.has(sampleRate)) {
+    args.push('-ar', '48000');
+  }
+  args.push('-id3v2_version', '3', outputPath);
+  return args;
+}
+
+function subtitleArgs({ inputPath, streamIndex, outputPath }) {
+  return [
+    '-y', '-i', inputPath,
+    '-map', `0:${streamIndex}`,
+    '-vn', '-an', '-dn',
+    '-c:s', 'srt',
+    '-f', 'srt',
+    outputPath,
+  ];
+}
+
+/**
+ * 生成导出计划：按需求命名
+ *  - 视频：<原文件名>.mp4（多视频轨时追加 .v2 / .v3）
+ *  - 音频：<原文件名>.<音频轨道名>.mp3
+ *  - 字幕：<原文件名>.<字幕轨道名>.srt
+ */
+export function buildPlan(media, outputDir, selection) {
+  const base = baseNameOf(media.file.name);
+  const used = new Set();
+  const items = [];
+  const skipped = [];
+
+  const videoTotal = media.tracks.video.length;
+
+  for (const track of media.tracks.video) {
+    if (!selection.video.includes(track.streamIndex)) continue;
+    const suffix = videoTotal > 1 ? `.v${track.indexInType + 1}` : '';
+    const fileName = uniqueFileName(`${base}${suffix}.mp4`, used);
+    items.push({
+      kind: 'video',
+      streamIndex: track.streamIndex,
+      trackName: track.name,
+      codec: track.codec,
+      fileName,
+      outputPath: path.join(outputDir, fileName),
+      durationSec: track.durationSec || media.format.durationSec || 0,
+    });
+  }
+
+  for (const track of media.tracks.audio) {
+    if (!selection.audio.includes(track.streamIndex)) continue;
+    const fileName = uniqueFileName(`${base}.${track.name}.mp3`, used);
+    items.push({
+      kind: 'audio',
+      streamIndex: track.streamIndex,
+      trackName: track.name,
+      codec: track.codec,
+      sampleRate: track.sampleRate,
+      fileName,
+      outputPath: path.join(outputDir, fileName),
+      durationSec: track.durationSec || media.format.durationSec || 0,
+    });
+  }
+
+  for (const track of media.tracks.subtitle) {
+    if (!selection.subtitle.includes(track.streamIndex)) continue;
+    if (!track.convertibleToSrt) {
+      skipped.push({
+        kind: 'subtitle',
+        streamIndex: track.streamIndex,
+        trackName: track.name,
+        reason: track.note || `字幕编码 ${track.codec} 无法转换为 SRT`,
+      });
+      continue;
+    }
+    const fileName = uniqueFileName(`${base}.${track.name}.srt`, used);
+    items.push({
+      kind: 'subtitle',
+      streamIndex: track.streamIndex,
+      trackName: track.name,
+      codec: track.codec,
+      fileName,
+      outputPath: path.join(outputDir, fileName),
+      durationSec: track.durationSec || media.format.durationSec || 0,
+    });
+  }
+
+  return { items, skipped };
+}
+
+async function hasContent(filePath) {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function removeQuietly(filePath) {
+  try {
+    await fs.rm(filePath, { force: true });
+  } catch {
+    // 忽略删除失败
+  }
+}
+
+async function runItem(item, media, hooks) {
+  const inputPath = media.storedPath;
+  const context = { ...item, inputPath, outputPath: item.outputPath };
+
+  const buildArgs = (copy) => {
+    if (item.kind === 'video') return videoArgs({ ...context, copy });
+    if (item.kind === 'audio') return audioArgs(context);
+    return subtitleArgs(context);
+  };
+
+  const attempt = async (copy) => {
+    try {
+      await runFfmpeg(buildArgs(copy), {
+        durationSec: item.durationSec,
+        onProgress: hooks.onProgress,
+      });
+      if (!(await hasContent(item.outputPath))) {
+        throw new Error('输出文件为空');
+      }
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  };
+
+  const first = await attempt(true);
+  if (first.ok) {
+    hooks.onProgress({ percent: 100, speed: null });
+    // 只有视频轨道存在「直接复制 / 转码」的区分
+    return { mode: item.kind === 'video' ? 'copy' : null };
+  }
+
+  // 视频轨道复制失败时，回退到转码；其他类型直接报错
+  if (item.kind !== 'video') throw first.error;
+
+  hooks.onNotice?.(COPY_FALLBACK_ERROR);
+  await removeQuietly(item.outputPath);
+  hooks.onProgress({ percent: 0, speed: null });
+
+  const second = await attempt(false);
+  if (second.ok) {
+    hooks.onProgress({ percent: 100, speed: null });
+    return { mode: 'transcode' };
+  }
+  throw second.error;
+}
+
+/**
+ * 顺序执行导出计划，实时更新 exportJob 状态
+ */
+export async function runExportJob(exportJob, media) {
+  const { items } = exportJob;
+
+  exportJob.status = 'running';
+  exportJob.startedAt = new Date().toISOString();
+
+  try {
+    await fs.mkdir(exportJob.outputDir, { recursive: true });
+    await fs.access(exportJob.outputDir, constants.W_OK);
+  } catch (error) {
+    exportJob.status = 'failed';
+    exportJob.error = `输出目录不可写：${exportJob.outputDir}（${error.message}）`;
+    exportJob.finishedAt = new Date().toISOString();
+    return exportJob;
+  }
+
+  for (let index = 0; index < exportJob.files.length; index += 1) {
+    if (exportJob.status === 'cancelled') break;
+
+    const file = exportJob.files[index];
+    const item = items[index];
+    file.status = 'running';
+    file.percent = 0;
+
+    try {
+      const result = await runItem(item, media, {
+        onProgress: ({ percent, speed, child }) => {
+          if (child) exportJob.currentChild = child;
+          if (typeof percent === 'number') file.percent = Math.round(percent * 10) / 10;
+          if (speed !== undefined) file.speed = speed;
+        },
+        onNotice: (message) => {
+          file.notice = message;
+        },
+      });
+      file.mode = result.mode;
+      file.status = 'done';
+      file.percent = 100;
+      file.sizeBytes = (await fs.stat(item.outputPath)).size;
+    } catch (error) {
+      file.status = 'failed';
+      file.percent = 0;
+      file.error = error.message;
+      await removeQuietly(item.outputPath);
+    } finally {
+      exportJob.currentChild = null;
+    }
+  }
+
+  if (exportJob.status === 'cancelled') {
+    exportJob.finishedAt = new Date().toISOString();
+    return exportJob;
+  }
+
+  exportJob.status = 'completed';
+  exportJob.finishedAt = new Date().toISOString();
+  return exportJob;
+}
+
+/** 中止导出：杀掉当前 FFmpeg 进程并标记任务已取消 */
+export function cancelExportJob(exportJob) {
+  exportJob.status = 'cancelled';
+  exportJob.error = '用户已取消导出';
+  if (exportJob.currentChild) {
+    try {
+      exportJob.currentChild.kill('SIGKILL');
+    } catch {
+      // 进程可能已退出
+    }
+  }
+  return exportJob;
+}

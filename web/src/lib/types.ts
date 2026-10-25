@@ -83,6 +83,8 @@ export interface ExportFileState {
   trackName: string;
   codec: string;
   fileName: string;
+  /** 视频文件封装进 MP4 的默认音轨名，其他类型为 null */
+  audioTrackName: string | null;
   status: ExportFileStatus;
   percent: number;
   speed: string | null;

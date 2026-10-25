@@ -8,6 +8,9 @@ import { AUDIO_BITRATE } from '../config.js';
 /** libmp3lame 支持的采样率，其他采样率需要重采样 */
 const MP3_SAMPLE_RATES = new Set([8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]);
 
+/** MP4 容器可直接复制的音频编码，其余（TrueHD / DTS / PCM 等）需转码为 AAC */
+const MP4_AUDIO_COPY_CODECS = new Set(['aac', 'mp3', 'ac3', 'eac3', 'alac']);
+
 const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';
 const STAGED_EXPORT_NOTICE = '当前目录受 macOS 权限限制，已自动先导出到临时目录再搬运到目标文件夹';
 
@@ -67,30 +70,34 @@ function runFfmpeg(args, { durationSec = 0, onProgress = () => {} } = {}) {
   });
 }
 
-function videoArgs({ inputPath, streamIndex, outputPath, codec, copy }) {
-  const base = [
-    '-y', '-i', inputPath,
-    '-map', `0:${streamIndex}`,
-    '-an', '-sn', '-dn',
-  ];
-  if (copy) {
-    return [
-      ...base,
-      '-c:v', 'copy',
-      ...(codec === 'hevc' ? ['-tag:v', 'hvc1'] : []),
-      '-movflags', '+faststart',
-      outputPath,
-    ];
+/**
+ * 视频轨：可选把「默认音轨」一起封装进 MP4
+ * 音频能直接放进 MP4 时无损复制，否则转码为 AAC
+ */
+function videoArgs({ inputPath, streamIndex, outputPath, codec, copy, audio }) {
+  const args = ['-y', '-i', inputPath, '-map', `0:${streamIndex}`];
+
+  if (audio) {
+    args.push('-map', `0:${audio.streamIndex}`);
+    args.push(
+      ...(MP4_AUDIO_COPY_CODECS.has(audio.codec)
+        ? ['-c:a', 'copy']
+        : ['-c:a', 'aac', '-b:a', AUDIO_BITRATE])
+    );
+  } else {
+    args.push('-an');
   }
-  return [
-    ...base,
-    '-c:v', 'libx264',
-    '-preset', 'medium',
-    '-crf', '18',
-    '-pix_fmt', 'yuv420p',
-    '-movflags', '+faststart',
-    outputPath,
-  ];
+
+  args.push('-sn', '-dn');
+
+  if (copy) {
+    args.push('-c:v', 'copy', ...(codec === 'hevc' ? ['-tag:v', 'hvc1'] : []));
+  } else {
+    args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p');
+  }
+
+  args.push('-movflags', '+faststart', outputPath);
+  return args;
 }
 
 function audioArgs({ inputPath, streamIndex, outputPath, sampleRate }) {
@@ -121,8 +128,8 @@ function subtitleArgs({ inputPath, streamIndex, outputPath }) {
 
 /**
  * 生成导出计划：按需求命名
- *  - 视频：<原文件名>.mp4（多视频轨时追加 .v2 / .v3）
- *  - 音频：<原文件名>.<音频轨道名>.mp3
+ *  - 视频：<原文件名>.mp4（多视频轨时追加 .v2 / .v3），并封装选定的默认音轨
+ *  - 音频：<原文件名>.<音频轨道名>.mp3（默认音轨已并入视频，不再单独导出）
  *  - 字幕：<原文件名>.<字幕轨道名>.srt
  */
 export function buildPlan(media, outputDir, selection) {
@@ -133,8 +140,16 @@ export function buildPlan(media, outputDir, selection) {
 
   const videoTotal = media.tracks.video.length;
 
-  for (const track of media.tracks.video) {
-    if (!selection.video.includes(track.streamIndex)) continue;
+  const selectedVideo = media.tracks.video.filter((track) => selection.video.includes(track.streamIndex));
+  const hasAudioTracks = media.tracks.audio.length > 0;
+
+  // 只有确实要导出视频时，默认音轨才生效（用于并入 MP4）
+  const defaultAudioStream =
+    selectedVideo.length > 0 && hasAudioTracks && Number.isInteger(selection.defaultAudio)
+      ? media.tracks.audio.find((track) => track.streamIndex === selection.defaultAudio) || null
+      : null;
+
+  for (const track of selectedVideo) {
     const suffix = videoTotal > 1 ? `.v${track.indexInType + 1}` : '';
     const fileName = uniqueFileName(`${base}${suffix}.mp4`, used);
     items.push({
@@ -145,11 +160,19 @@ export function buildPlan(media, outputDir, selection) {
       fileName,
       outputPath: path.join(outputDir, fileName),
       durationSec: track.durationSec || media.format.durationSec || 0,
+      audio: defaultAudioStream
+        ? {
+            streamIndex: defaultAudioStream.streamIndex,
+            trackName: defaultAudioStream.name,
+            codec: defaultAudioStream.codec,
+          }
+        : null,
     });
   }
 
   for (const track of media.tracks.audio) {
     if (!selection.audio.includes(track.streamIndex)) continue;
+    if (defaultAudioStream && track.streamIndex === defaultAudioStream.streamIndex) continue;
     const fileName = uniqueFileName(`${base}.${track.name}.mp3`, used);
     items.push({
       kind: 'audio',

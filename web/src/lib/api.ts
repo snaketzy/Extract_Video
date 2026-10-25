@@ -61,10 +61,15 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
-  startExport: (mediaId: string, outputDir: string, streams: Record<TrackKind, number[]>) =>
+  startExport: (
+    mediaId: string,
+    outputDir: string,
+    streams: Record<TrackKind, number[]>,
+    defaultAudio: number | null
+  ) =>
     request<ExportJob>(`/media/${mediaId}/export`, {
       method: 'POST',
-      body: JSON.stringify({ outputDir, streams }),
+      body: JSON.stringify({ outputDir, streams, defaultAudio }),
     }),
 
   getExport: (exportId: string) => request<ExportJob>(`/export/${exportId}`),

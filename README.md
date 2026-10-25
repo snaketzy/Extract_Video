@@ -8,14 +8,21 @@
 - 展示视频轨道参数：编码、Profile/Level、分辨率、帧率、码率、位深、像素格式、色彩空间
 - 展示音频轨道数量及参数：编码、采样率、声道、声道布局、码率、位深、语言、默认/强制标记
 - 展示字幕轨道数量及参数：编码、文本/图形类型、语言、标题、默认/强制标记
-- 勾选需要导出的轨道，点击「选择文件夹」调起系统原生目录对话框，文件直接写入该目录
+- 勾选需要导出的轨道，并为视频指定默认音轨（会封装进 MP4），点击「选择文件夹」调起系统原生目录对话框
 - 实时进度：每个文件的进度、FFmpeg 处理速度、完成大小、失败原因；支持取消
+
+## 默认音轨规则
+
+- 只要勾选了视频轨道且文件含音频轨道，就必须在「音频轨道」中指定一条默认音轨，否则「开始导出」不可点击
+- 默认音轨会被封装进导出的 MP4：源编码可直接放入 MP4（aac/mp3/ac3/eac3/alac）时无损复制，其他编码（TrueHD、DTS、PCM 等）自动转码为 AAC
+- 默认音轨不再单独导出为 mp3；其余勾选的音频轨道仍各自导出
+- 未勾选视频轨道时（仅导出音频/字幕），默认音轨不生效，所有勾选的音频轨道照常导出为 mp3
 
 ## 导出命名规则
 
 | 类型 | 文件名 |
 | --- | --- |
-| 视频 | `<原文件名>.mp4`（多视频轨时追加 `.v2` / `.v3`） |
+| 视频 | `<原文件名>.mp4`（多视频轨时追加 `.v2` / `.v3`，内含默认音轨） |
 | 音频 | `<原文件名>.<音频轨道名>.mp3` |
 | 字幕 | `<原文件名>.<字幕轨道名>.srt` |
 
@@ -72,7 +79,7 @@ web/             前端：React 19 + Vite + Tailwind CSS + shadcn/ui + Redux Too
 | GET | `/api/media/:id` | 重新获取轨道信息 |
 | DELETE | `/api/media/:id` | 删除任务与上传文件 |
 | POST | `/api/media/:id/pick-directory` | 调起原生目录选择框 |
-| POST | `/api/media/:id/export` | 创建导出任务，body：`{ outputDir, streams: { video, audio, subtitle } }` |
+| POST | `/api/media/:id/export` | 创建导出任务，body：`{ outputDir, streams: { video, audio, subtitle }, defaultAudio }`（`defaultAudio` 为音频轨道 streamIndex，导出视频时必填） |
 | GET | `/api/export/:id` | 查询导出进度 |
 | POST | `/api/export/:id/cancel` | 取消导出 |
 

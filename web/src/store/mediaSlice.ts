@@ -17,6 +17,8 @@ export interface MediaState {
 
   media: MediaInfo | null;
   selected: Record<TrackKind, number[]>;
+  /** 并入视频的默认音轨（streamIndex），仅在导出视频时生效 */
+  defaultAudio: number | null;
 
   outputDir: string;
   pickerStatus: 'idle' | 'opening' | 'unsupported' | 'error';
@@ -40,6 +42,7 @@ const initialState: MediaState = {
 
   media: null,
   selected: { video: [], audio: [], subtitle: [] },
+  defaultAudio: null,
 
   outputDir: '',
   pickerStatus: 'idle',
@@ -57,6 +60,25 @@ function allStreamIndexes(media: MediaInfo): Record<TrackKind, number[]> {
     subtitle: media.tracks.subtitle
       .filter((track) => track.convertibleToSrt)
       .map((track) => track.streamIndex),
+  };
+}
+
+/**
+ * 计算真正下发给后端的导出选择
+ * 导出视频时默认音轨会并入 MP4，因此不再单独导出为 mp3
+ */
+export function buildExportSelection(
+  media: MediaInfo,
+  selected: Record<TrackKind, number[]>,
+  defaultAudio: number | null
+) {
+  const requiresDefaultAudio = selected.video.length > 0 && media.tracks.audio.length > 0;
+  return {
+    requiresDefaultAudio,
+    defaultAudio: requiresDefaultAudio ? defaultAudio : null,
+    video: selected.video,
+    audio: requiresDefaultAudio ? selected.audio.filter((index) => index !== defaultAudio) : selected.audio,
+    subtitle: selected.subtitle,
   };
 }
 
@@ -100,11 +122,22 @@ export const pickOutputDirectory = createAsyncThunk<
 export const startExport = createAsyncThunk<ExportJob, void, { state: RootState; rejectValue: string }>(
   'media/startExport',
   async (_arg, { getState, rejectWithValue }) => {
-    const { media, selected, outputDir } = getState().media;
+    const { media, selected, outputDir, defaultAudio } = getState().media;
     if (!media) return rejectWithValue('请先选择视频文件');
     if (!outputDir.trim()) return rejectWithValue('请先选择导出目录');
+
+    const plan = buildExportSelection(media, selected, defaultAudio);
+    if (plan.requiresDefaultAudio && plan.defaultAudio === null) {
+      return rejectWithValue('请先为视频选择默认音轨');
+    }
+
     try {
-      return await api.startExport(media.id, outputDir.trim(), selected);
+      return await api.startExport(
+        media.id,
+        outputDir.trim(),
+        { video: plan.video, audio: plan.audio, subtitle: plan.subtitle },
+        plan.defaultAudio
+      );
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : '导出失败');
     }
@@ -163,6 +196,9 @@ const mediaSlice = createSlice({
     setKindSelection(state, action: PayloadAction<{ kind: TrackKind; streamIndexes: number[] }>) {
       state.selected[action.payload.kind] = action.payload.streamIndexes;
     },
+    defaultAudioChanged(state, action: PayloadAction<number | null>) {
+      state.defaultAudio = action.payload;
+    },
     outputDirChanged(state, action: PayloadAction<string>) {
       state.outputDir = action.payload;
       state.pickerError = null;
@@ -200,6 +236,7 @@ const mediaSlice = createSlice({
         state.sourceFile = { name: action.meta.arg.name, size: action.meta.arg.size };
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
+        state.defaultAudio = null;
         state.exportJob = null;
         state.exportError = null;
       })
@@ -208,6 +245,7 @@ const mediaSlice = createSlice({
         state.uploadProgress = 100;
         state.media = action.payload;
         state.selected = allStreamIndexes(action.payload);
+        state.defaultAudio = null;
       })
       .addCase(uploadSource.rejected, (state, action) => {
         state.uploadStatus = 'error';
@@ -258,6 +296,7 @@ const mediaSlice = createSlice({
         state.uploadError = null;
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
+        state.defaultAudio = null;
         state.exportJob = null;
       });
   },
@@ -267,6 +306,7 @@ export const {
   uploadProgressChanged,
   toggleTrack,
   setKindSelection,
+  defaultAudioChanged,
   outputDirChanged,
   pickerErrorCleared,
   exportErrorCleared,

@@ -14,7 +14,7 @@ import {
   formatText,
 } from '@/lib/format';
 import type { AudioTrack, SubtitleTrack, TrackKind, VideoTrack } from '@/lib/types';
-import { setKindSelection, toggleTrack } from '@/store/mediaSlice';
+import { buildExportSelection, defaultAudioChanged, setKindSelection, toggleTrack } from '@/store/mediaSlice';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 
 function outputBaseName(fileName: string): string {
@@ -100,10 +100,16 @@ function EmptyTracks({ text }: { text: string }) {
 
 export function TrackTables() {
   const dispatch = useAppDispatch();
-  const { media, selected } = useAppSelector((state) => state.media);
+  const { media, selected, defaultAudio } = useAppSelector((state) => state.media);
   if (!media) return null;
 
   const base = outputBaseName(media.file.name);
+  const plan = buildExportSelection(media, selected, defaultAudio);
+
+  // 只有文件含视频轨道时，「默认音轨」才有意义（用于封装进 MP4）
+  const showDefaultAudioColumn = media.tracks.video.length > 0;
+  const defaultAudioName =
+    defaultAudio === null ? null : media.tracks.audio.find((track) => track.streamIndex === defaultAudio)?.name ?? null;
 
   const videoIndexes = media.tracks.video.map((track) => track.streamIndex);
   const audioIndexes = media.tracks.audio.map((track) => track.streamIndex);
@@ -140,7 +146,10 @@ export function TrackTables() {
     <Card>
       <CardHeader>
         <CardTitle>2. 轨道参数</CardTitle>
-        <CardDescription>勾选需要导出的轨道；字幕仅支持可转换为 SRT 的文本字幕</CardDescription>
+        <CardDescription>
+          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；字幕仅支持可转换为 SRT
+          的文本字幕
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="video">
@@ -217,6 +226,11 @@ export function TrackTables() {
                           {media.tracks.video.length > 1
                             ? `${base}.v${track.indexInType + 1}.mp4`
                             : `${base}.mp4`}
+                          {plan.requiresDefaultAudio && (
+                            <p className={defaultAudioName ? undefined : 'text-destructive'}>
+                              {defaultAudioName ? `含默认音轨：${defaultAudioName}` : '尚未选择默认音轨'}
+                            </p>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -230,53 +244,91 @@ export function TrackTables() {
             {media.tracks.audio.length === 0 ? (
               <EmptyTracks text="该文件不含音频轨道" />
             ) : (
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SelectHead {...audioProps} />
-                      <TableHead>轨道</TableHead>
-                      <TableHead>编码</TableHead>
-                      <TableHead>采样率</TableHead>
-                      <TableHead>声道</TableHead>
-                      <TableHead>声道布局</TableHead>
-                      <TableHead>码率</TableHead>
-                      <TableHead>位深</TableHead>
-                      <TableHead>语言</TableHead>
-                      <TableHead>标记</TableHead>
-                      <TableHead>导出文件</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {media.tracks.audio.map((track: AudioTrack) => (
-                      <TableRow key={track.streamIndex}>
-                        <SelectCell {...audioProps} streamIndex={track.streamIndex} />
-                        <TableCell>
-                          <TrackIdentity
-                            indexInType={track.indexInType}
-                            streamIndex={track.streamIndex}
-                            name={track.name}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <CodecCell codec={track.codec} codecLongName={track.codecLongName} />
-                        </TableCell>
-                        <TableCell>{formatSampleRate(track.sampleRate)}</TableCell>
-                        <TableCell>{formatChannels(track.channels)}</TableCell>
-                        <TableCell>{formatText(track.channelLayout)}</TableCell>
-                        <TableCell>{formatBitrate(track.bitrate)}</TableCell>
-                        <TableCell>{formatText(track.bitDepth ? `${track.bitDepth} bit` : null)}</TableCell>
-                        <TableCell>{formatText(track.language)}</TableCell>
-                        <TableCell>
-                          <TrackFlags isDefault={track.isDefault} isForced={track.isForced} />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground font-mono text-xs">
-                          {`${base}.${track.name}.mp3`}
-                        </TableCell>
+              <div className="space-y-3">
+                {showDefaultAudioColumn && (
+                  <p className="text-muted-foreground text-xs">
+                    {plan.requiresDefaultAudio
+                      ? '选中的默认音轨会封装进导出的 MP4，且不再单独导出为 mp3。'
+                      : '勾选视频轨道后，可为视频选择一条默认音轨。'}
+                  </p>
+                )}
+                <div className="rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <SelectHead {...audioProps} />
+                        {showDefaultAudioColumn && <TableHead className="w-24">默认音轨</TableHead>}
+                        <TableHead>轨道</TableHead>
+                        <TableHead>编码</TableHead>
+                        <TableHead>采样率</TableHead>
+                        <TableHead>声道</TableHead>
+                        <TableHead>声道布局</TableHead>
+                        <TableHead>码率</TableHead>
+                        <TableHead>位深</TableHead>
+                        <TableHead>语言</TableHead>
+                        <TableHead>标记</TableHead>
+                        <TableHead>导出文件</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {media.tracks.audio.map((track: AudioTrack) => {
+                        const mergedIntoVideo =
+                          plan.requiresDefaultAudio && track.streamIndex === defaultAudio;
+                        return (
+                          <TableRow key={track.streamIndex}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selected.audio.includes(track.streamIndex) && !mergedIntoVideo}
+                                disabled={mergedIntoVideo}
+                                onCheckedChange={() => handleToggle('audio', track.streamIndex)}
+                                aria-label={`选择音频轨道 ${track.streamIndex}`}
+                              />
+                            </TableCell>
+                            {showDefaultAudioColumn && (
+                              <TableCell>
+                                <input
+                                  type="radio"
+                                  name="default-audio-track"
+                                  className="size-4 accent-primary"
+                                  checked={defaultAudio === track.streamIndex}
+                                  disabled={!plan.requiresDefaultAudio}
+                                  onChange={() => dispatch(defaultAudioChanged(track.streamIndex))}
+                                  aria-label={`将音频轨道 ${track.streamIndex} 设为默认音轨`}
+                                />
+                              </TableCell>
+                            )}
+                            <TableCell>
+                              <TrackIdentity
+                                indexInType={track.indexInType}
+                                streamIndex={track.streamIndex}
+                                name={track.name}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <CodecCell codec={track.codec} codecLongName={track.codecLongName} />
+                            </TableCell>
+                            <TableCell>{formatSampleRate(track.sampleRate)}</TableCell>
+                            <TableCell>{formatChannels(track.channels)}</TableCell>
+                            <TableCell>{formatText(track.channelLayout)}</TableCell>
+                            <TableCell>{formatBitrate(track.bitrate)}</TableCell>
+                            <TableCell>{formatText(track.bitDepth ? `${track.bitDepth} bit` : null)}</TableCell>
+                            <TableCell>{formatText(track.language)}</TableCell>
+                            <TableCell>
+                              <TrackFlags isDefault={track.isDefault} isForced={track.isForced} />
+                            </TableCell>
+                            <TableCell className="text-muted-foreground font-mono text-xs">
+                              {mergedIntoVideo ? (
+                                <Badge variant="secondary">已并入 mp4</Badge>
+                              ) : (
+                                `${base}.${track.name}.mp3`
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </TabsContent>

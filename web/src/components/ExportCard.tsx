@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator';
 import { formatBytes } from '@/lib/format';
 import type { ExportFileState, TrackKind } from '@/lib/types';
 import {
+  buildExportSelection,
   cancelExport,
   outputDirChanged,
   pickOutputDirectory,
@@ -47,7 +48,7 @@ function StatusBadge({ file }: { file: ExportFileState }) {
 
 export function ExportCard() {
   const dispatch = useAppDispatch();
-  const { media, selected, outputDir, pickerStatus, pickerError, exportJob, exportStarting, exportError, config } =
+  const { media, selected, defaultAudio, outputDir, pickerStatus, pickerError, exportJob, exportStarting, exportError, config } =
     useAppSelector((state) => state.media);
 
   const exportId = exportJob?.id ?? null;
@@ -63,9 +64,12 @@ export function ExportCard() {
 
   if (!media) return null;
 
-  const totalSelected = selected.video.length + selected.audio.length + selected.subtitle.length;
+  const plan = buildExportSelection(media, selected, defaultAudio);
+  const totalSelected = plan.video.length + plan.audio.length + plan.subtitle.length;
+  const missingDefaultAudio = plan.requiresDefaultAudio && plan.defaultAudio === null;
   const pickerSupported = config?.folderPickerSupported !== false && pickerStatus !== 'unsupported';
-  const canExport = totalSelected > 0 && outputDir.trim().length > 0 && !isExporting && !exportStarting;
+  const canExport =
+    totalSelected > 0 && !missingDefaultAudio && outputDir.trim().length > 0 && !isExporting && !exportStarting;
 
   const overallPercent =
     exportJob && exportJob.total > 0
@@ -121,15 +125,20 @@ export function ExportCard() {
         <div className="space-y-2">
           <p className="text-sm font-medium">导出内容</p>
           <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Badge variant={selected.video.length ? 'secondary' : 'outline'}>
-              视频 {selected.video.length} 条 → mp4
+            <Badge variant={plan.video.length ? 'secondary' : 'outline'}>
+              视频 {plan.video.length} 条 → mp4
             </Badge>
-            <Badge variant={selected.audio.length ? 'secondary' : 'outline'}>
-              音频 {selected.audio.length} 条 → mp3
+            <Badge variant={plan.audio.length ? 'secondary' : 'outline'}>
+              音频 {plan.audio.length} 条 → mp3
             </Badge>
-            <Badge variant={selected.subtitle.length ? 'secondary' : 'outline'}>
-              字幕 {selected.subtitle.length} 条 → srt
+            <Badge variant={plan.subtitle.length ? 'secondary' : 'outline'}>
+              字幕 {plan.subtitle.length} 条 → srt
             </Badge>
+            {plan.requiresDefaultAudio && (
+              <Badge variant={plan.defaultAudio === null ? 'destructive' : 'secondary'}>
+                默认音轨 {plan.defaultAudio === null ? '未选择' : '→ 并入 mp4'}
+              </Badge>
+            )}
             <span className="text-muted-foreground text-xs">共 {totalSelected} 个文件</span>
           </div>
           <p className="text-muted-foreground font-mono text-xs">
@@ -155,6 +164,9 @@ export function ExportCard() {
             </Button>
           )}
           {!outputDir.trim() && <span className="text-muted-foreground text-xs">请先选择导出目录</span>}
+          {missingDefaultAudio && (
+            <span className="text-destructive text-xs">请先在「音频轨道」中为视频选择默认音轨</span>
+          )}
           {totalSelected === 0 && <span className="text-muted-foreground text-xs">请至少勾选一条轨道</span>}
         </div>
 
@@ -217,6 +229,9 @@ export function ExportCard() {
                     <StatusBadge file={file} />
                     {file.mode === 'transcode' && <Badge variant="outline">已转码</Badge>}
                     {file.mode === 'copy' && <Badge variant="outline">直接复制</Badge>}
+                    {file.audioTrackName && (
+                      <Badge variant="secondary">含默认音轨：{file.audioTrackName}</Badge>
+                    )}
                     {file.status === 'done' && file.sizeBytes !== null && (
                       <span className="text-muted-foreground text-xs">{formatBytes(file.sizeBytes)}</span>
                     )}

@@ -165,6 +165,23 @@ apiRouter.post('/media/:id/export', async (req, res, next) => {
       subtitle: toStreamIndexes(streams.subtitle),
     };
 
+    const audioTracks = job.mediaInfo.tracks.audio;
+    const rawDefaultAudio = Number(req.body?.defaultAudio);
+    const defaultAudio = Number.isInteger(rawDefaultAudio) && rawDefaultAudio >= 0 ? rawDefaultAudio : null;
+
+    // 导出视频时必须指定默认音轨，用于封装进 MP4
+    if (selection.video.length > 0 && audioTracks.length > 0) {
+      if (defaultAudio === null) {
+        res.status(400).json({ error: '请先为视频选择默认音轨' });
+        return;
+      }
+      if (!audioTracks.some((track) => track.streamIndex === defaultAudio)) {
+        res.status(400).json({ error: '默认音轨不存在，请重新选择' });
+        return;
+      }
+    }
+    selection.defaultAudio = defaultAudio;
+
     const { items, skipped } = buildPlan(job.mediaInfo, outputDir, selection);
     if (items.length === 0) {
       res.status(400).json({ error: '未选中任何可导出的轨道', skipped });

@@ -11,6 +11,16 @@ const MP3_SAMPLE_RATES = new Set([8000, 11025, 12000, 16000, 22050, 24000, 32000
 /** MP4 容器可直接复制的音频编码，其余（TrueHD / DTS / PCM 等）需转码为 AAC */
 const MP4_AUDIO_COPY_CODECS = new Set(['aac', 'mp3', 'ac3', 'eac3', 'alac']);
 
+/** 字幕导出格式 -> 文件扩展名 */
+const SUBTITLE_EXTENSIONS = { srt: 'srt', webvtt: 'vtt' };
+/** 字幕导出格式 -> 展示名（用于跳过原因） */
+const SUBTITLE_LABELS = { srt: 'SRT', webvtt: 'WebVTT' };
+
+/** 把请求中的字幕格式收敛为受支持的值，默认 srt */
+export function normalizeSubtitleFormat(value) {
+  return value === 'webvtt' ? 'webvtt' : 'srt';
+}
+
 const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';
 const STAGED_EXPORT_NOTICE = '当前目录受 macOS 权限限制，已自动先导出到临时目录再搬运到目标文件夹';
 
@@ -115,13 +125,14 @@ function audioArgs({ inputPath, streamIndex, outputPath, sampleRate }) {
   return args;
 }
 
-function subtitleArgs({ inputPath, streamIndex, outputPath }) {
+function subtitleArgs({ inputPath, streamIndex, outputPath, format }) {
+  const codec = normalizeSubtitleFormat(format);
   return [
     '-y', '-i', inputPath,
     '-map', `0:${streamIndex}`,
     '-vn', '-an', '-dn',
-    '-c:s', 'srt',
-    '-f', 'srt',
+    '-c:s', codec,
+    '-f', codec,
     outputPath,
   ];
 }
@@ -130,7 +141,7 @@ function subtitleArgs({ inputPath, streamIndex, outputPath }) {
  * 生成导出计划：按需求命名
  *  - 视频：<原文件名>.mp4（多视频轨时追加 .v2 / .v3），并封装选定的默认音轨
  *  - 音频：<原文件名>.<音频轨道名>.mp3（默认音轨已并入视频，不再单独导出）
- *  - 字幕：<原文件名>.<字幕轨道名>.srt
+ *  - 字幕：<原文件名>.<字幕轨道名>.srt / .vtt（格式由 selection.subtitleFormat 决定）
  */
 export function buildPlan(media, outputDir, selection) {
   const base = baseNameOf(media.file.name);
@@ -186,23 +197,28 @@ export function buildPlan(media, outputDir, selection) {
     });
   }
 
+  const subtitleFormat = normalizeSubtitleFormat(selection.subtitleFormat);
+
   for (const track of media.tracks.subtitle) {
     if (!selection.subtitle.includes(track.streamIndex)) continue;
-    if (!track.convertibleToSrt) {
+    const convertible =
+      subtitleFormat === 'webvtt' ? track.convertibleToWebVtt : track.convertibleToSrt;
+    if (!convertible) {
       skipped.push({
         kind: 'subtitle',
         streamIndex: track.streamIndex,
         trackName: track.name,
-        reason: track.note || `字幕编码 ${track.codec} 无法转换为 SRT`,
+        reason: track.note || `字幕编码 ${track.codec} 无法转换为 ${SUBTITLE_LABELS[subtitleFormat]}`,
       });
       continue;
     }
-    const fileName = uniqueFileName(`${base}.${track.name}.srt`, used);
+    const fileName = uniqueFileName(`${base}.${track.name}.${SUBTITLE_EXTENSIONS[subtitleFormat]}`, used);
     items.push({
       kind: 'subtitle',
       streamIndex: track.streamIndex,
       trackName: track.name,
       codec: track.codec,
+      format: subtitleFormat,
       fileName,
       outputPath: path.join(outputDir, fileName),
       durationSec: track.durationSec || media.format.durationSec || 0,

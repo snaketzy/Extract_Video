@@ -14,7 +14,14 @@ import {
   formatText,
 } from '@/lib/format';
 import type { AudioTrack, SubtitleTrack, TrackKind, VideoTrack } from '@/lib/types';
-import { buildExportSelection, defaultAudioChanged, setKindSelection, toggleTrack } from '@/store/mediaSlice';
+import {
+  buildExportSelection,
+  defaultAudioChanged,
+  setKindSelection,
+  subtitleFormatAvailable,
+  subtitleFormatChanged,
+  toggleTrack,
+} from '@/store/mediaSlice';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 
 function outputBaseName(fileName: string): string {
@@ -98,13 +105,25 @@ function EmptyTracks({ text }: { text: string }) {
   return <p className="text-muted-foreground py-8 text-center text-sm">{text}</p>;
 }
 
+/** 该字幕轨可导出的文本格式名 */
+function subtitleFormatsOf(track: SubtitleTrack): string[] {
+  const formats: string[] = [];
+  if (track.convertibleToSrt) formats.push('SRT');
+  if (track.convertibleToWebVtt) formats.push('WebVTT');
+  return formats;
+}
+
 export function TrackTables() {
   const dispatch = useAppDispatch();
-  const { media, selected, defaultAudio } = useAppSelector((state) => state.media);
+  const { media, selected, defaultAudio, subtitleFormat } = useAppSelector((state) => state.media);
   if (!media) return null;
 
   const base = outputBaseName(media.file.name);
-  const plan = buildExportSelection(media, selected, defaultAudio);
+  const plan = buildExportSelection(media, selected, defaultAudio, subtitleFormat);
+
+  const srtAvailable = subtitleFormatAvailable(media.tracks.subtitle, 'srt');
+  const webvttAvailable = subtitleFormatAvailable(media.tracks.subtitle, 'webvtt');
+  const subtitleExtension = subtitleFormat === 'webvtt' ? 'vtt' : 'srt';
 
   // 只有文件含视频轨道时，「默认音轨」才有意义（用于封装进 MP4）
   const showDefaultAudioColumn = media.tracks.video.length > 0;
@@ -147,8 +166,8 @@ export function TrackTables() {
       <CardHeader>
         <CardTitle>2. 轨道参数</CardTitle>
         <CardDescription>
-          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；字幕仅支持可转换为 SRT
-          的文本字幕
+          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；字幕在「字幕轨道」中以
+          SRT / WebVTT 二选一导出，图形字幕无法转换
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -337,60 +356,97 @@ export function TrackTables() {
             {media.tracks.subtitle.length === 0 ? (
               <EmptyTracks text="该文件不含字幕轨道" />
             ) : (
-              <div className="rounded-lg border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SelectHead {...subtitleProps} />
-                      <TableHead>轨道</TableHead>
-                      <TableHead>编码</TableHead>
-                      <TableHead>类型</TableHead>
-                      <TableHead>语言</TableHead>
-                      <TableHead>标题</TableHead>
-                      <TableHead>标记</TableHead>
-                      <TableHead>导出文件</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {media.tracks.subtitle.map((track: SubtitleTrack) => (
-                      <TableRow key={track.streamIndex}>
-                        <TableCell>
-                          <Checkbox
-                            checked={selected.subtitle.includes(track.streamIndex)}
-                            disabled={!track.convertibleToSrt}
-                            onCheckedChange={() => handleToggle('subtitle', track.streamIndex)}
-                            aria-label={`选择字幕轨道 ${track.streamIndex}`}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TrackIdentity
-                            indexInType={track.indexInType}
-                            streamIndex={track.streamIndex}
-                            name={track.name}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <CodecCell codec={track.codec} codecLongName={track.codecLongName} />
-                        </TableCell>
-                        <TableCell>
-                          {track.convertibleToSrt ? (
-                            <Badge variant="secondary">文本，可转 SRT</Badge>
-                          ) : (
-                            <Badge variant="warning">{formatText(track.note, '图形字幕')}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>{formatText(track.language)}</TableCell>
-                        <TableCell>{formatText(track.title)}</TableCell>
-                        <TableCell>
-                          <TrackFlags isDefault={track.isDefault} isForced={track.isForced} />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground font-mono text-xs">
-                          {track.convertibleToSrt ? `${base}.${track.name}.srt` : '—'}
-                        </TableCell>
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-4">
+                  <span className="text-sm font-medium">导出格式</span>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="subtitle-format"
+                      className="size-4 accent-primary"
+                      checked={subtitleFormat === 'srt'}
+                      disabled={!srtAvailable}
+                      onChange={() => dispatch(subtitleFormatChanged('srt'))}
+                      aria-label="字幕导出为 SRT"
+                    />
+                    SRT（.srt）
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="subtitle-format"
+                      className="size-4 accent-primary"
+                      checked={subtitleFormat === 'webvtt'}
+                      disabled={!webvttAvailable}
+                      onChange={() => dispatch(subtitleFormatChanged('webvtt'))}
+                      aria-label="字幕导出为 WebVTT"
+                    />
+                    WebVTT（.vtt）
+                  </label>
+                </div>
+                {!srtAvailable && !webvttAvailable && (
+                  <p className="text-muted-foreground text-xs">
+                    当前字幕均为图形字幕，无法转换为 SRT / WebVTT
+                  </p>
+                )}
+                <div className="rounded-lg border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <SelectHead {...subtitleProps} />
+                        <TableHead>轨道</TableHead>
+                        <TableHead>编码</TableHead>
+                        <TableHead>类型</TableHead>
+                        <TableHead>语言</TableHead>
+                        <TableHead>标题</TableHead>
+                        <TableHead>标记</TableHead>
+                        <TableHead>导出文件</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {media.tracks.subtitle.map((track: SubtitleTrack) => {
+                        const formats = subtitleFormatsOf(track);
+                        return (
+                          <TableRow key={track.streamIndex}>
+                            <TableCell>
+                              <Checkbox
+                                checked={selected.subtitle.includes(track.streamIndex)}
+                                disabled={formats.length === 0}
+                                onCheckedChange={() => handleToggle('subtitle', track.streamIndex)}
+                                aria-label={`选择字幕轨道 ${track.streamIndex}`}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <TrackIdentity
+                                indexInType={track.indexInType}
+                                streamIndex={track.streamIndex}
+                                name={track.name}
+                              />
+                            </TableCell>
+                            <TableCell>
+                              <CodecCell codec={track.codec} codecLongName={track.codecLongName} />
+                            </TableCell>
+                            <TableCell>
+                              {formats.length > 0 ? (
+                                <Badge variant="secondary">文本，可转 {formats.join(' / ')}</Badge>
+                              ) : (
+                                <Badge variant="warning">{formatText(track.note, '图形字幕')}</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>{formatText(track.language)}</TableCell>
+                            <TableCell>{formatText(track.title)}</TableCell>
+                            <TableCell>
+                              <TrackFlags isDefault={track.isDefault} isForced={track.isForced} />
+                            </TableCell>
+                            <TableCell className="text-muted-foreground font-mono text-xs">
+                              {formats.length > 0 ? `${base}.${track.name}.${subtitleExtension}` : '—'}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
               </div>
             )}
           </TabsContent>

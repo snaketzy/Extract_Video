@@ -42,10 +42,14 @@ export interface AudioTrack extends BaseTrack {
   bitDepth: number | null;
 }
 
+/** 字幕导出格式（互斥单选） */
+export type SubtitleFormat = 'srt' | 'webvtt';
+
 export interface SubtitleTrack extends BaseTrack {
   kind: 'subtitle';
   isTextBased: boolean;
   convertibleToSrt: boolean;
+  convertibleToWebVtt: boolean;
   note: string | null;
 }
 

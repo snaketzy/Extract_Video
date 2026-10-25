@@ -1,7 +1,7 @@
 import { createAsyncThunk, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 
 import { api, uploadMedia } from '@/lib/api';
-import type { AppConfig, ExportJob, HealthPayload, MediaInfo, TrackKind } from '@/lib/types';
+import type { AppConfig, ExportJob, HealthPayload, MediaInfo, SubtitleFormat, TrackKind } from '@/lib/types';
 import type { RootState } from '@/store';
 
 export interface MediaState {
@@ -19,6 +19,8 @@ export interface MediaState {
   selected: Record<TrackKind, number[]>;
   /** 并入视频的默认音轨（streamIndex），仅在导出视频时生效 */
   defaultAudio: number | null;
+  /** 字幕导出格式，全部字幕轨共用一个单选 */
+  subtitleFormat: SubtitleFormat;
 
   outputDir: string;
   pickerStatus: 'idle' | 'opening' | 'unsupported' | 'error';
@@ -43,6 +45,7 @@ const initialState: MediaState = {
   media: null,
   selected: { video: [], audio: [], subtitle: [] },
   defaultAudio: null,
+  subtitleFormat: 'srt',
 
   outputDir: '',
   pickerStatus: 'idle',
@@ -58,9 +61,16 @@ function allStreamIndexes(media: MediaInfo): Record<TrackKind, number[]> {
     video: media.tracks.video.map((track) => track.streamIndex),
     audio: media.tracks.audio.map((track) => track.streamIndex),
     subtitle: media.tracks.subtitle
-      .filter((track) => track.convertibleToSrt)
+      .filter((track) => track.convertibleToSrt || track.convertibleToWebVtt)
       .map((track) => track.streamIndex),
   };
+}
+
+/** 该文件是否有字幕轨可用指定格式导出 */
+export function subtitleFormatAvailable(tracks: MediaInfo['tracks']['subtitle'], format: SubtitleFormat): boolean {
+  return tracks.some((track) =>
+    format === 'webvtt' ? track.convertibleToWebVtt : track.convertibleToSrt
+  );
 }
 
 /**
@@ -70,12 +80,14 @@ function allStreamIndexes(media: MediaInfo): Record<TrackKind, number[]> {
 export function buildExportSelection(
   media: MediaInfo,
   selected: Record<TrackKind, number[]>,
-  defaultAudio: number | null
+  defaultAudio: number | null,
+  subtitleFormat: SubtitleFormat
 ) {
   const requiresDefaultAudio = selected.video.length > 0 && media.tracks.audio.length > 0;
   return {
     requiresDefaultAudio,
     defaultAudio: requiresDefaultAudio ? defaultAudio : null,
+    subtitleFormat,
     video: selected.video,
     audio: requiresDefaultAudio ? selected.audio.filter((index) => index !== defaultAudio) : selected.audio,
     subtitle: selected.subtitle,
@@ -122,11 +134,11 @@ export const pickOutputDirectory = createAsyncThunk<
 export const startExport = createAsyncThunk<ExportJob, void, { state: RootState; rejectValue: string }>(
   'media/startExport',
   async (_arg, { getState, rejectWithValue }) => {
-    const { media, selected, outputDir, defaultAudio } = getState().media;
+    const { media, selected, outputDir, defaultAudio, subtitleFormat } = getState().media;
     if (!media) return rejectWithValue('请先选择视频文件');
     if (!outputDir.trim()) return rejectWithValue('请先选择导出目录');
 
-    const plan = buildExportSelection(media, selected, defaultAudio);
+    const plan = buildExportSelection(media, selected, defaultAudio, subtitleFormat);
     if (plan.requiresDefaultAudio && plan.defaultAudio === null) {
       return rejectWithValue('请先为视频选择默认音轨');
     }
@@ -136,7 +148,8 @@ export const startExport = createAsyncThunk<ExportJob, void, { state: RootState;
         media.id,
         outputDir.trim(),
         { video: plan.video, audio: plan.audio, subtitle: plan.subtitle },
-        plan.defaultAudio
+        plan.defaultAudio,
+        plan.subtitleFormat
       );
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : '导出失败');
@@ -199,6 +212,9 @@ const mediaSlice = createSlice({
     defaultAudioChanged(state, action: PayloadAction<number | null>) {
       state.defaultAudio = action.payload;
     },
+    subtitleFormatChanged(state, action: PayloadAction<SubtitleFormat>) {
+      state.subtitleFormat = action.payload;
+    },
     outputDirChanged(state, action: PayloadAction<string>) {
       state.outputDir = action.payload;
       state.pickerError = null;
@@ -237,6 +253,7 @@ const mediaSlice = createSlice({
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
         state.defaultAudio = null;
+        state.subtitleFormat = 'srt';
         state.exportJob = null;
         state.exportError = null;
       })
@@ -246,6 +263,7 @@ const mediaSlice = createSlice({
         state.media = action.payload;
         state.selected = allStreamIndexes(action.payload);
         state.defaultAudio = null;
+        state.subtitleFormat = 'srt';
       })
       .addCase(uploadSource.rejected, (state, action) => {
         state.uploadStatus = 'error';
@@ -297,6 +315,7 @@ const mediaSlice = createSlice({
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
         state.defaultAudio = null;
+        state.subtitleFormat = 'srt';
         state.exportJob = null;
       });
   },
@@ -307,6 +326,7 @@ export const {
   toggleTrack,
   setKindSelection,
   defaultAudioChanged,
+  subtitleFormatChanged,
   outputDirChanged,
   pickerErrorCleared,
   exportErrorCleared,

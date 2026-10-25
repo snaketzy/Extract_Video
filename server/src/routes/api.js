@@ -8,7 +8,7 @@ import { pipeline } from 'node:stream/promises';
 import { DEFAULT_OUTPUT_DIR, FOLDER_PICKER_ENABLED, MAX_UPLOAD_BYTES, UPLOAD_ROOT } from '../config.js';
 import { describeBinaries } from '../lib/binaries.js';
 import { probeMedia } from '../lib/probe.js';
-import { buildPlan, cancelExportJob, runExportJob } from '../lib/export.js';
+import { buildPlan, cancelExportJob, normalizeSubtitleFormat, runExportJob } from '../lib/export.js';
 import {
   createExportJob,
   createMediaJob,
@@ -181,6 +181,8 @@ apiRouter.post('/media/:id/export', async (req, res, next) => {
       }
     }
     selection.defaultAudio = defaultAudio;
+    // 字幕导出格式：srt / webvtt，缺省为 srt
+    selection.subtitleFormat = normalizeSubtitleFormat(req.body?.subtitleFormat);
 
     const { items, skipped } = buildPlan(job.mediaInfo, outputDir, selection);
     if (items.length === 0) {

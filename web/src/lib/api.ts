@@ -3,6 +3,7 @@ import type {
   ExportJob,
   HealthPayload,
   MediaInfo,
+  SubtitleFormat,
   TrackKind,
 } from '@/lib/types';
 
@@ -65,11 +66,12 @@ export const api = {
     mediaId: string,
     outputDir: string,
     streams: Record<TrackKind, number[]>,
-    defaultAudio: number | null
+    defaultAudio: number | null,
+    subtitleFormat: SubtitleFormat
   ) =>
     request<ExportJob>(`/media/${mediaId}/export`, {
       method: 'POST',
-      body: JSON.stringify({ outputDir, streams, defaultAudio }),
+      body: JSON.stringify({ outputDir, streams, defaultAudio, subtitleFormat }),
     }),
 
   getExport: (exportId: string) => request<ExportJob>(`/export/${exportId}`),

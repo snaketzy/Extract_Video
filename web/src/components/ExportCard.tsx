@@ -48,7 +48,7 @@ function StatusBadge({ file }: { file: ExportFileState }) {
 
 export function ExportCard() {
   const dispatch = useAppDispatch();
-  const { media, selected, defaultAudio, outputDir, pickerStatus, pickerError, exportJob, exportStarting, exportError, config } =
+  const { media, selected, defaultAudio, subtitleFormat, outputDir, pickerStatus, pickerError, exportJob, exportStarting, exportError, config } =
     useAppSelector((state) => state.media);
 
   const exportId = exportJob?.id ?? null;
@@ -64,8 +64,9 @@ export function ExportCard() {
 
   if (!media) return null;
 
-  const plan = buildExportSelection(media, selected, defaultAudio);
+  const plan = buildExportSelection(media, selected, defaultAudio, subtitleFormat);
   const totalSelected = plan.video.length + plan.audio.length + plan.subtitle.length;
+  const subtitleExtension = plan.subtitleFormat === 'webvtt' ? 'vtt' : 'srt';
   const missingDefaultAudio = plan.requiresDefaultAudio && plan.defaultAudio === null;
   const pickerSupported = config?.folderPickerSupported !== false && pickerStatus !== 'unsupported';
   const canExport =
@@ -132,7 +133,7 @@ export function ExportCard() {
               音频 {plan.audio.length} 条 → mp3
             </Badge>
             <Badge variant={plan.subtitle.length ? 'secondary' : 'outline'}>
-              字幕 {plan.subtitle.length} 条 → srt
+              字幕 {plan.subtitle.length} 条 → {subtitleExtension}
             </Badge>
             {plan.requiresDefaultAudio && (
               <Badge variant={plan.defaultAudio === null ? 'destructive' : 'secondary'}>
@@ -142,7 +143,7 @@ export function ExportCard() {
             <span className="text-muted-foreground text-xs">共 {totalSelected} 个文件</span>
           </div>
           <p className="text-muted-foreground font-mono text-xs">
-            {`视频：${media.file.name.replace(/\.[^.]+$/, '')}.mp4 · 音频：<原文件名>.<轨道名>.mp3 · 字幕：<原文件名>.<轨道名>.srt`}
+            {`视频：${media.file.name.replace(/\.[^.]+$/, '')}.mp4 · 音频：<原文件名>.<轨道名>.mp3 · 字幕：<原文件名>.<轨道名>.${subtitleExtension}`}
           </p>
         </div>
 

@@ -9,7 +9,7 @@ const TEXT_SUBTITLE_CODECS = new Set([
   'stl', 'vplayer', 'eia_608', 'hdmv_text_subtitle', 'ttml',
 ]);
 
-/** 图形字幕，无法转换为 SRT */
+/** 图形字幕，无法转换为文本字幕（SRT / WebVTT） */
 const GRAPHIC_SUBTITLE_CODECS = new Set([
   'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'xsub', 'dvb_teletext',
 ]);
@@ -114,7 +114,8 @@ function mapSubtitle(stream, indexInType) {
     ...baseTrack(stream, 'subtitle', indexInType),
     isTextBased,
     convertibleToSrt: isTextBased,
-    note: isGraphic ? '图形字幕（PGS/VobSub），无法转换为 SRT' : null,
+    convertibleToWebVtt: isTextBased,
+    note: isGraphic ? '图形字幕（PGS/VobSub），无法转换为 SRT / WebVTT' : null,
   };
 }
 

@@ -20,7 +20,7 @@
 
 ## 字幕导出格式
 
-- 字幕导出格式是 SRT / WebVTT 二选一，作用于全部勾选的字幕轨道，默认 SRT
+- 字幕导出格式是 SRT / WebVTT 二选一，作用于全部勾选的字幕轨道，默认 WebVTT
 - 只有当文件里存在可导出 SRT 的字幕轨时 SRT 选项可选；WebVTT 同理；两个都不可选时（全部为图形字幕）会在页面上给出提示
 - 图形字幕（PGS / VobSub 等）无法转换为文本格式，勾选框禁用，若被批量勾选会在结果里列为「已跳过」并说明原因
 - 扩展名随格式变化：SRT 为 `.srt`，WebVTT 为 `.vtt`
@@ -86,7 +86,7 @@ web/             前端：React 19 + Vite + Tailwind CSS + shadcn/ui + Redux Too
 | GET | `/api/media/:id` | 重新获取轨道信息 |
 | DELETE | `/api/media/:id` | 删除任务与上传文件 |
 | POST | `/api/media/:id/pick-directory` | 调起原生目录选择框 |
-| POST | `/api/media/:id/export` | 创建导出任务，body：`{ outputDir, streams: { video, audio, subtitle }, defaultAudio, subtitleFormat }`（`defaultAudio` 为音频轨道 streamIndex，导出视频时必填；`subtitleFormat` 取 `srt` / `webvtt`，默认 `srt`） |
+| POST | `/api/media/:id/export` | 创建导出任务，body：`{ outputDir, streams: { video, audio, subtitle }, defaultAudio, subtitleFormat }`（`defaultAudio` 为音频轨道 streamIndex，导出视频时必填；`subtitleFormat` 取 `srt` / `webvtt`，默认 `webvtt`） |
 | GET | `/api/export/:id` | 查询导出进度 |
 | POST | `/api/export/:id/cancel` | 取消导出 |
 

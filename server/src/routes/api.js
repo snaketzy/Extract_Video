@@ -181,7 +181,7 @@ apiRouter.post('/media/:id/export', async (req, res, next) => {
       }
     }
     selection.defaultAudio = defaultAudio;
-    // 字幕导出格式：srt / webvtt，缺省为 srt
+    // 字幕导出格式：srt / webvtt，缺省为 webvtt
     selection.subtitleFormat = normalizeSubtitleFormat(req.body?.subtitleFormat);
 
     const { items, skipped } = buildPlan(job.mediaInfo, outputDir, selection);

@@ -16,9 +16,9 @@ const SUBTITLE_EXTENSIONS = { srt: 'srt', webvtt: 'vtt' };
 /** 字幕导出格式 -> 展示名（用于跳过原因） */
 const SUBTITLE_LABELS = { srt: 'SRT', webvtt: 'WebVTT' };
 
-/** 把请求中的字幕格式收敛为受支持的值，默认 srt */
+/** 把请求中的字幕格式收敛为受支持的值，默认 webvtt */
 export function normalizeSubtitleFormat(value) {
-  return value === 'webvtt' ? 'webvtt' : 'srt';
+  return value === 'srt' ? 'srt' : 'webvtt';
 }
 
 const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';

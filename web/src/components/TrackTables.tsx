@@ -364,24 +364,24 @@ export function TrackTables() {
                       type="radio"
                       name="subtitle-format"
                       className="size-4 accent-primary"
-                      checked={subtitleFormat === 'srt'}
-                      disabled={!srtAvailable}
-                      onChange={() => dispatch(subtitleFormatChanged('srt'))}
-                      aria-label="字幕导出为 SRT"
-                    />
-                    SRT（.srt）
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name="subtitle-format"
-                      className="size-4 accent-primary"
                       checked={subtitleFormat === 'webvtt'}
                       disabled={!webvttAvailable}
                       onChange={() => dispatch(subtitleFormatChanged('webvtt'))}
                       aria-label="字幕导出为 WebVTT"
                     />
                     WebVTT（.vtt）
+                  </label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="subtitle-format"
+                      className="size-4 accent-primary"
+                      checked={subtitleFormat === 'srt'}
+                      disabled={!srtAvailable}
+                      onChange={() => dispatch(subtitleFormatChanged('srt'))}
+                      aria-label="字幕导出为 SRT"
+                    />
+                    SRT（.srt）
                   </label>
                 </div>
                 {!srtAvailable && !webvttAvailable && (

@@ -45,7 +45,7 @@ const initialState: MediaState = {
   media: null,
   selected: { video: [], audio: [], subtitle: [] },
   defaultAudio: null,
-  subtitleFormat: 'srt',
+  subtitleFormat: 'webvtt',
 
   outputDir: '',
   pickerStatus: 'idle',
@@ -253,7 +253,7 @@ const mediaSlice = createSlice({
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
         state.defaultAudio = null;
-        state.subtitleFormat = 'srt';
+        state.subtitleFormat = 'webvtt';
         state.exportJob = null;
         state.exportError = null;
       })
@@ -263,7 +263,7 @@ const mediaSlice = createSlice({
         state.media = action.payload;
         state.selected = allStreamIndexes(action.payload);
         state.defaultAudio = null;
-        state.subtitleFormat = 'srt';
+        state.subtitleFormat = 'webvtt';
       })
       .addCase(uploadSource.rejected, (state, action) => {
         state.uploadStatus = 'error';
@@ -315,7 +315,7 @@ const mediaSlice = createSlice({
         state.media = null;
         state.selected = { video: [], audio: [], subtitle: [] };
         state.defaultAudio = null;
-        state.subtitleFormat = 'srt';
+        state.subtitleFormat = 'webvtt';
         state.exportJob = null;
       });
   },

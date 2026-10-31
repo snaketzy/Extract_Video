@@ -292,11 +292,23 @@ async function probeDirectWrite(outputDir) {
   }
 }
 
+/** Finder 找不到目标文件夹时会一直挂住不返回，必须设上限 */
+const APPLESCRIPT_TIMEOUT_MS = 60000;
+
 function runAppleScript(script) {
   return new Promise((resolve, reject) => {
-    execFile('osascript', ['-e', script], { timeout: 120000 }, (error, stdout, stderr) => {
+    execFile('osascript', ['-e', script], { timeout: APPLESCRIPT_TIMEOUT_MS }, (error, stdout, stderr) => {
       if (error) {
-        reject(new Error(String(stderr || error.message).trim() || 'AppleScript 执行失败'));
+        const detail = String(stderr || '').trim();
+        if (detail) {
+          reject(new Error(`AppleScript 执行失败：${detail}`));
+          return;
+        }
+        if (error.killed || error.signal) {
+          reject(new Error(`Finder 无响应（超过 ${APPLESCRIPT_TIMEOUT_MS / 1000} 秒未返回）`));
+          return;
+        }
+        reject(new Error(`AppleScript 执行失败：${error.message}`));
         return;
       }
       resolve(String(stdout || '').trim());
@@ -304,13 +316,45 @@ function runAppleScript(script) {
   });
 }
 
+/**
+ * 用 Finder 逐级补齐缺失的目录。
+ * Node 进程在 ~/Movies 等受保护目录下可能没有写权限，但 Finder 有，所以交给 Finder 创建。
+ */
+async function ensureFinderFolder(dirPath) {
+  const segments = dirPath.split(path.sep).filter(Boolean);
+  if (segments.length === 0) return;
+
+  const lines = ['tell application "Finder"'];
+  let current = '';
+  for (const segment of segments) {
+    const parent = current || path.sep;
+    current = `${current}${path.sep}${segment}`;
+    lines.push(
+      '  try',
+      `    set _item to (POSIX file ${JSON.stringify(current)}) as alias`,
+      '  on error',
+      `    make new folder at (POSIX file ${JSON.stringify(parent)}) with properties {name:${JSON.stringify(segment)}}`,
+      '  end try'
+    );
+  }
+  lines.push('end tell');
+  await runAppleScript(lines.join('\n'));
+}
+
+/** 把 staging 产物搬运到目标目录；目标文件夹不存在时先补建 */
 async function moveWithAppleScript(sourcePath, targetPath) {
+  const targetDir = path.dirname(targetPath);
   const script = [
     `set srcFile to POSIX file ${JSON.stringify(sourcePath)}`,
-    `set dstFolder to POSIX file ${JSON.stringify(path.dirname(targetPath))}`,
+    `set dstFolder to POSIX file ${JSON.stringify(targetDir)}`,
     'tell application "Finder" to duplicate srcFile to dstFolder with replacing',
   ].join('\n');
-  await runAppleScript(script);
+  try {
+    await ensureFinderFolder(targetDir);
+    await runAppleScript(script);
+  } catch (error) {
+    throw new Error(`搬运到 ${targetDir} 失败：${error.message}`);
+  }
 }
 
 async function resolveOutputStrategy(exportJob, media) {

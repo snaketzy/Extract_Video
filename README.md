@@ -49,7 +49,7 @@ npm install
 
 ## 运行
 
-开发模式（后端 8080 + 前端 Vite 5174，已配置 `/api` 代理）：
+开发模式（后端 8080 + 前端 Vite 5170，已配置 `/api` 代理）：
 
 ```bash
 npm run dev

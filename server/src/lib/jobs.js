@@ -7,6 +7,8 @@ import { JOB_TTL_MS, UPLOAD_ROOT } from '../config.js';
 const mediaJobs = new Map();
 /** exportId -> 导出任务 */
 const exportJobs = new Map();
+/** batchId -> 批次导出任务 */
+const batchJobs = new Map();
 
 export function createMediaJob({ originalName, storedPath, mediaInfo, sizeBytes }) {
   const id = randomUUID();
@@ -64,6 +66,36 @@ export function getExportJob(id) {
   return exportJobs.get(id) || null;
 }
 
+/**
+ * 创建批次导出任务：每个文件一个导出任务，由调用方串行驱动
+ * entries: [{ media, outputDir, items, skipped }]
+ */
+export function createBatchJob({ outputRoot, entries }) {
+  const id = randomUUID();
+  const job = {
+    id,
+    outputRoot,
+    status: 'queued',
+    error: null,
+    cancelled: false,
+    /** 当前正在跑的文件条目，取消时用于终止其 FFmpeg */
+    currentEntry: null,
+    createdAt: Date.now(),
+    entries: entries.map(({ media, outputDir, items, skipped }) => ({
+      mediaId: media.id,
+      sourceFileName: media.originalName,
+      outputDir,
+      exportJob: createExportJob(media, { outputDir, items, skipped }),
+    })),
+  };
+  batchJobs.set(id, job);
+  return job;
+}
+
+export function getBatchJob(id) {
+  return batchJobs.get(id) || null;
+}
+
 export function serializeMedia(job) {
   return {
     ...job.mediaInfo,
@@ -108,6 +140,60 @@ export function serializeExport(job) {
   };
 }
 
+/** 导出任务状态 -> 批次内单个文件条目的状态 */
+const ENTRY_STATUS = {
+  queued: 'pending',
+  running: 'running',
+  completed: 'done',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
+export function serializeBatch(job) {
+  const entries = job.entries.map((entry) => {
+    const data = serializeExport(entry.exportJob);
+    return {
+      mediaId: entry.mediaId,
+      sourceFileName: entry.sourceFileName,
+      outputDir: entry.outputDir,
+      status: ENTRY_STATUS[entry.exportJob.status] || 'pending',
+      error: data.error,
+      skipped: data.skipped,
+      files: data.files,
+      total: data.total,
+      completed: data.completed,
+      failed: data.failed,
+    };
+  });
+
+  const files = entries.flatMap((entry) => entry.files);
+  const total = files.length;
+  const settled = files.filter((file) => file.status === 'done' || file.status === 'failed');
+  const percent = total
+    ? Math.round(
+        (files.reduce(
+          (sum, file) => sum + (file.status === 'done' || file.status === 'failed' ? 100 : file.percent),
+          0
+        ) /
+          total) *
+          10
+      ) / 10
+    : 0;
+
+  return {
+    id: job.id,
+    outputRoot: job.outputRoot,
+    status: job.status,
+    error: job.error,
+    entries,
+    total,
+    completed: settled.length,
+    failed: files.filter((file) => file.status === 'failed').length,
+    percent,
+    createdAt: new Date(job.createdAt).toISOString(),
+  };
+}
+
 async function removeDir(dir) {
   try {
     await fs.rm(dir, { recursive: true, force: true });
@@ -147,6 +233,9 @@ export async function sweepExpired() {
   }
   for (const [id, job] of exportJobs) {
     if (job.createdAt < deadline) exportJobs.delete(id);
+  }
+  for (const [id, job] of batchJobs) {
+    if (job.createdAt < deadline) batchJobs.delete(id);
   }
   await sweepOrphanUploadDirs();
 }

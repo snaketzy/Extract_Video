@@ -1,6 +1,8 @@
 import type { CheckedState } from '@radix-ui/react-checkbox';
+import { CopyCheck } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -15,12 +17,15 @@ import {
 } from '@/lib/format';
 import type { AudioTrack, SubtitleTrack, TrackKind, VideoTrack } from '@/lib/types';
 import {
+  activeKeyChanged,
   buildExportSelection,
   defaultAudioChanged,
-  setKindSelection,
+  kindSelectionSet,
+  selectActiveItem,
+  selectionAppliedToAll,
   subtitleFormatAvailable,
   subtitleFormatChanged,
-  toggleTrack,
+  trackToggled,
 } from '@/store/mediaSlice';
 import { useAppDispatch, useAppSelector } from '@/store/hooks';
 
@@ -116,8 +121,13 @@ function subtitleFormatsOf(track: SubtitleTrack): string[] {
 
 export function TrackTables() {
   const dispatch = useAppDispatch();
-  const { media, selected, defaultAudio, subtitleFormat } = useAppSelector((state) => state.media);
-  if (!media) return null;
+  const items = useAppSelector((state) => state.media.items);
+  const item = useAppSelector(selectActiveItem);
+  if (!item || !item.media) return null;
+
+  const media = item.media;
+  const { key, selected, defaultAudio, subtitleFormat } = item;
+  const readyItems = items.filter((entry) => entry.media);
 
   const base = outputBaseName(media.file.name);
   const plan = buildExportSelection(media, selected, defaultAudio, subtitleFormat);
@@ -137,11 +147,11 @@ export function TrackTables() {
   const subtitleIndexes = media.tracks.subtitle.map((track) => track.streamIndex);
 
   const handleToggle = (kind: TrackKind, streamIndex: number) => {
-    dispatch(toggleTrack({ kind, streamIndex }));
+    dispatch(trackToggled({ key, kind, streamIndex }));
   };
 
   const handleToggleAll = (kind: TrackKind, indexes: number[], checked: boolean) => {
-    dispatch(setKindSelection({ kind, streamIndexes: checked ? indexes : [] }));
+    dispatch(kindSelectionSet({ key, kind, streamIndexes: checked ? indexes : [] }));
   };
 
   const videoProps: ColumnProps = {
@@ -168,11 +178,37 @@ export function TrackTables() {
       <CardHeader>
         <CardTitle>2. 轨道参数</CardTitle>
         <CardDescription>
-          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；文本字幕以
+          当前正在编辑：<span className="text-foreground font-medium">{media.file.name}</span>
+          。勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；文本字幕以
           SRT / WebVTT 二选一导出，PGS 图形字幕原样导出为 .sup
         </CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {readyItems.length > 1 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground text-xs">切换文件</span>
+            {readyItems.map((entry) => (
+              <Button
+                key={entry.key}
+                size="sm"
+                variant={entry.key === key ? 'secondary' : 'outline'}
+                onClick={() => dispatch(activeKeyChanged(entry.key))}
+              >
+                {entry.sourceFile?.name ?? entry.media?.file.name}
+              </Button>
+            ))}
+            <Button
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              onClick={() => dispatch(selectionAppliedToAll(key))}
+            >
+              <CopyCheck />
+              应用到全部
+            </Button>
+          </div>
+        )}
+
         <Tabs defaultValue="video">
           <TabsList>
             <TabsTrigger value="video">
@@ -309,11 +345,13 @@ export function TrackTables() {
                               <TableCell>
                                 <input
                                   type="radio"
-                                  name="default-audio-track"
+                                  name={`default-audio-track-${key}`}
                                   className="size-4 accent-primary"
                                   checked={defaultAudio === track.streamIndex}
                                   disabled={!plan.requiresDefaultAudio}
-                                  onChange={() => dispatch(defaultAudioChanged(track.streamIndex))}
+                                  onChange={() =>
+                                    dispatch(defaultAudioChanged({ key, streamIndex: track.streamIndex }))
+                                  }
                                   aria-label={`将音频轨道 ${track.streamIndex} 设为默认音轨`}
                                 />
                               </TableCell>
@@ -364,11 +402,11 @@ export function TrackTables() {
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="radio"
-                      name="subtitle-format"
+                      name={`subtitle-format-${key}`}
                       className="size-4 accent-primary"
                       checked={subtitleFormat === 'webvtt'}
                       disabled={!webvttAvailable}
-                      onChange={() => dispatch(subtitleFormatChanged('webvtt'))}
+                      onChange={() => dispatch(subtitleFormatChanged({ key, format: 'webvtt' }))}
                       aria-label="字幕导出为 WebVTT"
                     />
                     WebVTT（.vtt）
@@ -376,11 +414,11 @@ export function TrackTables() {
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="radio"
-                      name="subtitle-format"
+                      name={`subtitle-format-${key}`}
                       className="size-4 accent-primary"
                       checked={subtitleFormat === 'srt'}
                       disabled={!srtAvailable}
-                      onChange={() => dispatch(subtitleFormatChanged('srt'))}
+                      onChange={() => dispatch(subtitleFormatChanged({ key, format: 'srt' }))}
                       aria-label="字幕导出为 SRT"
                     />
                     SRT（.srt）

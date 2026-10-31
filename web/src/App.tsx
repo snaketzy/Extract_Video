@@ -42,7 +42,10 @@ function BinaryStatus() {
 
 export default function App() {
   const dispatch = useAppDispatch();
-  const { bootstrapStatus, bootstrapError, health, media } = useAppSelector((state) => state.media);
+  const { bootstrapStatus, bootstrapError, health } = useAppSelector((state) => state.media);
+  const readyCount = useAppSelector(
+    (state) => state.media.items.filter((item) => item.media).length
+  );
 
   useEffect(() => {
     void dispatch(bootstrap());
@@ -59,7 +62,7 @@ export default function App() {
             <div>
               <h1 className="text-base font-semibold">视频轨道分离工具</h1>
               <p className="text-muted-foreground text-xs">
-                本地 FFmpeg 解析容器信息，按轨道导出 MP4 / MP3 / SRT
+                本地 FFmpeg 解析容器信息，批量按轨道导出 MP4 / MP3 / 字幕
               </p>
             </div>
           </div>
@@ -87,9 +90,9 @@ export default function App() {
         )}
 
         <FilePickerCard />
-        {media && <MediaSummaryCard />}
-        {media && <TrackTables />}
-        {media && <ExportCard />}
+        {readyCount > 0 && <MediaSummaryCard />}
+        {readyCount > 0 && <TrackTables />}
+        {readyCount > 0 && <ExportCard />}
       </main>
     </div>
   );

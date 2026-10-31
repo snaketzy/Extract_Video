@@ -199,7 +199,9 @@ export function buildPlan(media, outputDir, selection) {
     });
   }
 
-  const subtitleFormat = normalizeSubtitleFormat(selection.subtitleFormat);
+  // 'sup' 只对 PGS 图形字幕有意义（由轨道编码决定）；文本字幕一律落到 SRT / WebVTT
+  const requestedSubtitleFormat = normalizeSubtitleFormat(selection.subtitleFormat);
+  const subtitleFormat = requestedSubtitleFormat === 'sup' ? 'webvtt' : requestedSubtitleFormat;
 
   for (const track of media.tracks.subtitle) {
     if (!selection.subtitle.includes(track.streamIndex)) continue;

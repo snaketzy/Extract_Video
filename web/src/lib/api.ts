@@ -1,6 +1,6 @@
 import type {
   AppConfig,
-  ExportJob,
+  BatchJob,
   HealthPayload,
   MediaInfo,
   SubtitleFormat,
@@ -62,23 +62,25 @@ export const api = {
       body: JSON.stringify({}),
     }),
 
-  startExport: (
-    mediaId: string,
-    outputDir: string,
-    streams: Record<TrackKind, number[]>,
-    defaultAudio: number | null,
-    subtitleFormat: SubtitleFormat
-  ) =>
-    request<ExportJob>(`/media/${mediaId}/export`, {
+  /** 单个文件的批次导出请求项 */
+  startBatchExport: (outputRoot: string, items: BatchExportItem[]) =>
+    request<BatchJob>('/batch/export', {
       method: 'POST',
-      body: JSON.stringify({ outputDir, streams, defaultAudio, subtitleFormat }),
+      body: JSON.stringify({ outputRoot, items }),
     }),
 
-  getExport: (exportId: string) => request<ExportJob>(`/export/${exportId}`),
+  getBatch: (batchId: string) => request<BatchJob>(`/batch/${batchId}`),
 
-  cancelExport: (exportId: string) =>
-    request<ExportJob>(`/export/${exportId}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
+  cancelBatch: (batchId: string) =>
+    request<BatchJob>(`/batch/${batchId}/cancel`, { method: 'POST', body: JSON.stringify({}) }),
 };
+
+export interface BatchExportItem {
+  mediaId: string;
+  streams: Record<TrackKind, number[]>;
+  defaultAudio: number | null;
+  subtitleFormat: SubtitleFormat;
+}
 
 /** 上传源文件：请求体为文件二进制，进度通过 XHR 上报 */
 export function uploadMedia(

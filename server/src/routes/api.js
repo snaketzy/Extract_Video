@@ -5,17 +5,25 @@ import { randomUUID } from 'node:crypto';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-import { DEFAULT_OUTPUT_DIR, FOLDER_PICKER_ENABLED, MAX_UPLOAD_BYTES, UPLOAD_ROOT } from '../config.js';
+import {
+  DEFAULT_OUTPUT_DIR,
+  FOLDER_PICKER_ENABLED,
+  MAX_BATCH_FILES,
+  MAX_UPLOAD_BYTES,
+  UPLOAD_ROOT,
+} from '../config.js';
 import { describeBinaries } from '../lib/binaries.js';
 import { probeMedia } from '../lib/probe.js';
-import { buildPlan, cancelExportJob, normalizeSubtitleFormat, runExportJob } from '../lib/export.js';
+import { buildPlan, normalizeSubtitleFormat } from '../lib/export.js';
+import { cancelBatchJob, runBatchJob } from '../lib/batch.js';
+import { baseNameOf, uniqueFileName } from '../lib/trackName.js';
 import {
-  createExportJob,
+  createBatchJob,
   createMediaJob,
   dropMediaJob,
-  getExportJob,
+  getBatchJob,
   getMediaJob,
-  serializeExport,
+  serializeBatch,
   serializeMedia,
 } from '../lib/jobs.js';
 import { FolderPickerUnsupportedError, pickDirectory } from '../lib/folderPicker.js';
@@ -44,6 +52,7 @@ apiRouter.get('/config', (_req, res) => {
     platform: process.platform,
     defaultOutputDir: DEFAULT_OUTPUT_DIR,
     maxUploadBytes: MAX_UPLOAD_BYTES,
+    maxBatchFiles: MAX_BATCH_FILES,
   });
 });
 
@@ -139,87 +148,118 @@ apiRouter.post('/media/:id/pick-directory', async (req, res, next) => {
   }
 });
 
-/** 创建导出任务 */
-apiRouter.post('/media/:id/export', async (req, res, next) => {
+/**
+ * 创建批次导出任务
+ * body: { outputRoot, items: [{ mediaId, streams, defaultAudio, subtitleFormat }] }
+ * 每个文件输出到 <outputRoot>/<源文件基名>/ 下的独立目录
+ */
+apiRouter.post('/batch/export', async (req, res, next) => {
   try {
-    const job = getMediaJob(req.params.id);
-    if (!job) {
-      res.status(404).json({ error: '媒体任务不存在或已过期，请重新选择文件' });
-      return;
-    }
-
-    const outputDir = String(req.body?.outputDir || '').trim();
-    if (!outputDir) {
+    const outputRoot = String(req.body?.outputRoot || '').trim();
+    if (!outputRoot) {
       res.status(400).json({ error: '请先选择导出目录' });
       return;
     }
-    if (!path.isAbsolute(outputDir)) {
+    if (!path.isAbsolute(outputRoot)) {
       res.status(400).json({ error: '导出目录必须是绝对路径' });
       return;
     }
 
-    const streams = req.body?.streams || {};
-    const selection = {
-      video: toStreamIndexes(streams.video),
-      audio: toStreamIndexes(streams.audio),
-      subtitle: toStreamIndexes(streams.subtitle),
-    };
-
-    const audioTracks = job.mediaInfo.tracks.audio;
-    const rawDefaultAudio = Number(req.body?.defaultAudio);
-    const defaultAudio = Number.isInteger(rawDefaultAudio) && rawDefaultAudio >= 0 ? rawDefaultAudio : null;
-
-    // 导出视频时必须指定默认音轨，用于封装进 MP4
-    if (selection.video.length > 0 && audioTracks.length > 0) {
-      if (defaultAudio === null) {
-        res.status(400).json({ error: '请先为视频选择默认音轨' });
-        return;
-      }
-      if (!audioTracks.some((track) => track.streamIndex === defaultAudio)) {
-        res.status(400).json({ error: '默认音轨不存在，请重新选择' });
-        return;
-      }
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (rawItems.length === 0) {
+      res.status(400).json({ error: '请先选择要导出的文件' });
+      return;
     }
-    selection.defaultAudio = defaultAudio;
-    // 字幕导出格式：srt / webvtt，缺省为 webvtt
-    selection.subtitleFormat = normalizeSubtitleFormat(req.body?.subtitleFormat);
-
-    const { items, skipped } = buildPlan(job.mediaInfo, outputDir, selection);
-    if (items.length === 0) {
-      res.status(400).json({ error: '未选中任何可导出的轨道', skipped });
+    if (rawItems.length > MAX_BATCH_FILES) {
+      res.status(400).json({ error: `每批最多处理 ${MAX_BATCH_FILES} 个文件，当前 ${rawItems.length} 个` });
       return;
     }
 
-    const exportJob = createExportJob(job, { outputDir, items, skipped });
-    runExportJob(exportJob, job).catch((error) => {
-      exportJob.status = 'failed';
-      exportJob.error = error.message;
-      exportJob.finishedAt = new Date().toISOString();
+    // 同批出现同名基名时，后一个目录追加 -2
+    const usedDirNames = new Set();
+    const entries = [];
+
+    for (const raw of rawItems) {
+      const job = getMediaJob(String(raw?.mediaId || ''));
+      if (!job) {
+        res.status(404).json({ error: '有文件的临时任务已过期，请重新选择后再导出' });
+        return;
+      }
+
+      const streams = raw?.streams || {};
+      const selection = {
+        video: toStreamIndexes(streams.video),
+        audio: toStreamIndexes(streams.audio),
+        subtitle: toStreamIndexes(streams.subtitle),
+      };
+
+      const audioTracks = job.mediaInfo.tracks.audio;
+      // 注意：Number(null) === 0，未指定默认音轨时必须显式当作「未选择」
+      const rawDefaultAudio = raw?.defaultAudio;
+      const parsedDefaultAudio =
+        rawDefaultAudio === null || rawDefaultAudio === undefined || rawDefaultAudio === ''
+          ? NaN
+          : Number(rawDefaultAudio);
+      const defaultAudio =
+        Number.isInteger(parsedDefaultAudio) && parsedDefaultAudio >= 0 ? parsedDefaultAudio : null;
+
+      // 导出视频时必须指定默认音轨，用于封装进 MP4
+      if (selection.video.length > 0 && audioTracks.length > 0) {
+        if (defaultAudio === null) {
+          res.status(400).json({ error: `${job.originalName}：请先为视频选择默认音轨` });
+          return;
+        }
+        if (!audioTracks.some((track) => track.streamIndex === defaultAudio)) {
+          res.status(400).json({ error: `${job.originalName}：默认音轨不存在，请重新选择` });
+          return;
+        }
+      }
+      selection.defaultAudio = defaultAudio;
+      // 字幕导出格式：srt / webvtt，缺省为 webvtt
+      selection.subtitleFormat = normalizeSubtitleFormat(raw?.subtitleFormat);
+
+      const dirName = uniqueFileName(baseNameOf(job.originalName), usedDirNames);
+      const outputDir = path.join(outputRoot, dirName);
+
+      const { items, skipped } = buildPlan(job.mediaInfo, outputDir, selection);
+      if (items.length === 0) {
+        res.status(400).json({ error: `${job.originalName}：未选中任何可导出的轨道`, skipped });
+        return;
+      }
+
+      entries.push({ media: job, outputDir, items, skipped });
+    }
+
+    const batchJob = createBatchJob({ outputRoot, entries });
+    runBatchJob(batchJob).catch((error) => {
+      batchJob.status = 'failed';
+      batchJob.error = error.message;
+      batchJob.finishedAt = new Date().toISOString();
     });
 
-    res.status(202).json(serializeExport(exportJob));
+    res.status(202).json(serializeBatch(batchJob));
   } catch (error) {
     next(error);
   }
 });
 
-apiRouter.get('/export/:id', (req, res) => {
-  const job = getExportJob(req.params.id);
+apiRouter.get('/batch/:id', (req, res) => {
+  const job = getBatchJob(req.params.id);
   if (!job) {
-    res.status(404).json({ error: '导出任务不存在' });
+    res.status(404).json({ error: '批次任务不存在' });
     return;
   }
-  res.json(serializeExport(job));
+  res.json(serializeBatch(job));
 });
 
-apiRouter.post('/export/:id/cancel', (req, res) => {
-  const job = getExportJob(req.params.id);
+apiRouter.post('/batch/:id/cancel', (req, res) => {
+  const job = getBatchJob(req.params.id);
   if (!job) {
-    res.status(404).json({ error: '导出任务不存在' });
+    res.status(404).json({ error: '批次任务不存在' });
     return;
   }
-  if (job.status === 'running' || job.status === 'queued') {
-    cancelExportJob(job);
+  if (job.status === 'queued' || job.status === 'running') {
+    cancelBatchJob(job);
   }
-  res.json(serializeExport(job));
+  res.json(serializeBatch(job));
 });

@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatBitrate, formatBytes, formatDuration, formatText } from '@/lib/format';
+import { selectActiveItem } from '@/store/mediaSlice';
 import { useAppSelector } from '@/store/hooks';
 
 function InfoItem({ label, value }: { label: string; value: string }) {
@@ -14,7 +15,8 @@ function InfoItem({ label, value }: { label: string; value: string }) {
 }
 
 export function MediaSummaryCard() {
-  const media = useAppSelector((state) => state.media.media);
+  const item = useAppSelector(selectActiveItem);
+  const media = item?.media;
   if (!media) return null;
 
   return (

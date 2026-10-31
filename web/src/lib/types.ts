@@ -109,17 +109,34 @@ export interface SkippedTrack {
 
 export type ExportStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
-export interface ExportJob {
-  id: string;
+/** 批次内单个文件的处理状态 */
+export type BatchEntryStatus = 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface BatchEntry {
   mediaId: string;
+  sourceFileName: string;
+  /** 该文件的导出目录（<输出根目录>/<源文件基名>） */
   outputDir: string;
-  status: ExportStatus;
+  status: BatchEntryStatus;
   error: string | null;
   skipped: SkippedTrack[];
   files: ExportFileState[];
   total: number;
   completed: number;
   failed: number;
+}
+
+export interface BatchJob {
+  id: string;
+  outputRoot: string;
+  status: ExportStatus;
+  error: string | null;
+  entries: BatchEntry[];
+  /** 全部文件条目里的导出文件总数 */
+  total: number;
+  completed: number;
+  failed: number;
+  percent: number;
   createdAt: string;
 }
 
@@ -142,4 +159,6 @@ export interface AppConfig {
   platform: string;
   defaultOutputDir: string;
   maxUploadBytes: number;
+  /** 单批次最多可处理的文件数 */
+  maxBatchFiles: number;
 }

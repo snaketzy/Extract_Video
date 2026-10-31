@@ -67,6 +67,14 @@ export function ExportCard() {
   const plan = buildExportSelection(media, selected, defaultAudio, subtitleFormat);
   const totalSelected = plan.video.length + plan.audio.length + plan.subtitle.length;
   const subtitleExtension = plan.subtitleFormat === 'webvtt' ? 'vtt' : 'srt';
+  const selectedSubtitles = media.tracks.subtitle.filter((track) => plan.subtitle.includes(track.streamIndex));
+  const pgsSubtitleCount = selectedSubtitles.filter((track) => track.convertibleToSup).length;
+  const textSubtitleCount = selectedSubtitles.length - pgsSubtitleCount;
+  const subtitleTargets = [
+    textSubtitleCount > 0 ? subtitleExtension : null,
+    pgsSubtitleCount > 0 ? 'sup' : null,
+  ].filter((item): item is string => item !== null);
+  const subtitleTargetLabel = subtitleTargets.length > 0 ? subtitleTargets.join(' / ') : subtitleExtension;
   const missingDefaultAudio = plan.requiresDefaultAudio && plan.defaultAudio === null;
   const pickerSupported = config?.folderPickerSupported !== false && pickerStatus !== 'unsupported';
   const canExport =
@@ -133,7 +141,7 @@ export function ExportCard() {
               音频 {plan.audio.length} 条 → mp3
             </Badge>
             <Badge variant={plan.subtitle.length ? 'secondary' : 'outline'}>
-              字幕 {plan.subtitle.length} 条 → {subtitleExtension}
+              字幕 {plan.subtitle.length} 条 → {subtitleTargetLabel}
             </Badge>
             {plan.requiresDefaultAudio && (
               <Badge variant={plan.defaultAudio === null ? 'destructive' : 'secondary'}>
@@ -143,7 +151,7 @@ export function ExportCard() {
             <span className="text-muted-foreground text-xs">共 {totalSelected} 个文件</span>
           </div>
           <p className="text-muted-foreground font-mono text-xs">
-            {`视频：${media.file.name.replace(/\.[^.]+$/, '')}.mp4 · 音频：<原文件名>.<轨道名>.mp3 · 字幕：<原文件名>.<轨道名>.${subtitleExtension}`}
+            {`视频：${media.file.name.replace(/\.[^.]+$/, '')}.mp4 · 音频：<原文件名>.<轨道名>.mp3 · 字幕：<原文件名>.<轨道名>.${subtitleExtension}（PGS 为 .sup）`}
           </p>
         </div>
 

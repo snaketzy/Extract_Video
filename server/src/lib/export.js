@@ -18,7 +18,8 @@ const SUBTITLE_LABELS = { srt: 'SRT', webvtt: 'WebVTT' };
 
 /** 把请求中的字幕格式收敛为受支持的值，默认 webvtt */
 export function normalizeSubtitleFormat(value) {
-  return value === 'srt' ? 'srt' : 'webvtt';
+  if (value === 'srt' || value === 'sup') return value;
+  return 'webvtt';
 }
 
 const COPY_FALLBACK_ERROR = 'MP4 容器不支持直接复制该视频编码，已自动转码';
@@ -131,7 +132,8 @@ function subtitleArgs({ inputPath, streamIndex, outputPath, format }) {
     '-y', '-i', inputPath,
     '-map', `0:${streamIndex}`,
     '-vn', '-an', '-dn',
-    '-c:s', codec,
+    // PGS 抽取为 .sup 是原样复制，不做任何转换
+    '-c:s', codec === 'sup' ? 'copy' : codec,
     '-f', codec,
     outputPath,
   ];
@@ -201,6 +203,23 @@ export function buildPlan(media, outputDir, selection) {
 
   for (const track of media.tracks.subtitle) {
     if (!selection.subtitle.includes(track.streamIndex)) continue;
+
+    // PGS 图形字幕不受 SRT / WebVTT 单选影响，一律原样抽取为 .sup
+    if (track.convertibleToSup) {
+      const fileName = uniqueFileName(`${base}.${track.name}.sup`, used);
+      items.push({
+        kind: 'subtitle',
+        streamIndex: track.streamIndex,
+        trackName: track.name,
+        codec: track.codec,
+        format: 'sup',
+        fileName,
+        outputPath: path.join(outputDir, fileName),
+        durationSec: track.durationSec || media.format.durationSec || 0,
+      });
+      continue;
+    }
+
     const convertible =
       subtitleFormat === 'webvtt' ? track.convertibleToWebVtt : track.convertibleToSrt;
     if (!convertible) {

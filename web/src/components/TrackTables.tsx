@@ -105,11 +105,12 @@ function EmptyTracks({ text }: { text: string }) {
   return <p className="text-muted-foreground py-8 text-center text-sm">{text}</p>;
 }
 
-/** 该字幕轨可导出的文本格式名 */
+/** 该字幕轨可导出的格式名 */
 function subtitleFormatsOf(track: SubtitleTrack): string[] {
   const formats: string[] = [];
   if (track.convertibleToSrt) formats.push('SRT');
   if (track.convertibleToWebVtt) formats.push('WebVTT');
+  if (track.convertibleToSup) formats.push('SUP');
   return formats;
 }
 
@@ -123,6 +124,7 @@ export function TrackTables() {
 
   const srtAvailable = subtitleFormatAvailable(media.tracks.subtitle, 'srt');
   const webvttAvailable = subtitleFormatAvailable(media.tracks.subtitle, 'webvtt');
+  const hasPgsTrack = media.tracks.subtitle.some((track) => track.convertibleToSup);
   const subtitleExtension = subtitleFormat === 'webvtt' ? 'vtt' : 'srt';
 
   // 只有文件含视频轨道时，「默认音轨」才有意义（用于封装进 MP4）
@@ -166,8 +168,8 @@ export function TrackTables() {
       <CardHeader>
         <CardTitle>2. 轨道参数</CardTitle>
         <CardDescription>
-          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；字幕在「字幕轨道」中以
-          SRT / WebVTT 二选一导出，图形字幕无法转换
+          勾选需要导出的轨道；导出视频需先在「音频轨道」中指定默认音轨（会封装进 MP4，不再单独导出为 mp3）；文本字幕以
+          SRT / WebVTT 二选一导出，PGS 图形字幕原样导出为 .sup
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -383,10 +385,17 @@ export function TrackTables() {
                     />
                     SRT（.srt）
                   </label>
+                  {hasPgsTrack && (
+                    <span className="text-muted-foreground text-xs">
+                      格式仅作用于文本字幕轨；PGS 图形字幕固定导出为 .sup
+                    </span>
+                  )}
                 </div>
                 {!srtAvailable && !webvttAvailable && (
                   <p className="text-muted-foreground text-xs">
-                    当前字幕均为图形字幕，无法转换为 SRT / WebVTT
+                    {hasPgsTrack
+                      ? '当前字幕均为图形字幕，无法转换为 SRT / WebVTT；勾选后将以 .sup 原样导出'
+                      : '当前字幕均为图形字幕，无法转换为 SRT / WebVTT'}
                   </p>
                 )}
                 <div className="rounded-lg border">
@@ -427,7 +436,9 @@ export function TrackTables() {
                               <CodecCell codec={track.codec} codecLongName={track.codecLongName} />
                             </TableCell>
                             <TableCell>
-                              {formats.length > 0 ? (
+                              {track.convertibleToSup ? (
+                                <Badge variant="secondary">图形字幕，可原样导出 .sup</Badge>
+                              ) : formats.length > 0 ? (
                                 <Badge variant="secondary">文本，可转 {formats.join(' / ')}</Badge>
                               ) : (
                                 <Badge variant="warning">{formatText(track.note, '图形字幕')}</Badge>
@@ -439,7 +450,11 @@ export function TrackTables() {
                               <TrackFlags isDefault={track.isDefault} isForced={track.isForced} />
                             </TableCell>
                             <TableCell className="text-muted-foreground font-mono text-xs">
-                              {formats.length > 0 ? `${base}.${track.name}.${subtitleExtension}` : '—'}
+                              {track.convertibleToSup
+                                ? `${base}.${track.name}.sup`
+                                : formats.length > 0
+                                  ? `${base}.${track.name}.${subtitleExtension}`
+                                  : '—'}
                             </TableCell>
                           </TableRow>
                         );

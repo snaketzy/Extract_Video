@@ -50,6 +50,8 @@ export interface SubtitleTrack extends BaseTrack {
   isTextBased: boolean;
   convertibleToSrt: boolean;
   convertibleToWebVtt: boolean;
+  /** PGS 图形字幕可原样抽取为 .sup */
+  convertibleToSup: boolean;
   note: string | null;
 }
 

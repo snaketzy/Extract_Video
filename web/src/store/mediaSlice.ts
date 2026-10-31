@@ -61,7 +61,7 @@ function allStreamIndexes(media: MediaInfo): Record<TrackKind, number[]> {
     video: media.tracks.video.map((track) => track.streamIndex),
     audio: media.tracks.audio.map((track) => track.streamIndex),
     subtitle: media.tracks.subtitle
-      .filter((track) => track.convertibleToSrt || track.convertibleToWebVtt)
+      .filter((track) => track.convertibleToSrt || track.convertibleToWebVtt || track.convertibleToSup)
       .map((track) => track.streamIndex),
   };
 }

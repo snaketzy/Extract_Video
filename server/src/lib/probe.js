@@ -110,11 +110,14 @@ function mapSubtitle(stream, indexInType) {
   const codec = stream.codec_name || 'unknown';
   const isTextBased = TEXT_SUBTITLE_CODECS.has(codec);
   const isGraphic = GRAPHIC_SUBTITLE_CODECS.has(codec);
+  const isPgs = codec === 'hdmv_pgs_subtitle';
   return {
     ...baseTrack(stream, 'subtitle', indexInType),
     isTextBased,
     convertibleToSrt: isTextBased,
     convertibleToWebVtt: isTextBased,
+    // PGS 无法转文本，但可以原样抽取为 .sup
+    convertibleToSup: isPgs,
     note: isGraphic ? '图形字幕（PGS/VobSub），无法转换为 SRT / WebVTT' : null,
   };
 }
